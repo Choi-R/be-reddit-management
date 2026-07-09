@@ -1,0 +1,8 @@
+# Neon Postgres Database Connection String (from Neon Console)
+DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
+
+# Secret key used to sign JWT Auth tokens
+JWT_SECRET="generate-a-secure-random-jwt-signing-key-here"
+
+# Secret key used to authorize hourly background Cron executions
+CRON_SECRET="generate-a-secure-random-cron-header-key-here"

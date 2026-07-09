@@ -1,0 +1,11 @@
+name = "be-reddit-management"
+main = "src/index.ts"
+compatibility_date = "2024-04-03"
+
+[triggers]
+crons = ["0 * * * *"]
+
+# Bindings and variables are injected as secrets in production:
+# - DATABASE_URL (connection string to Neon Postgres)
+# - JWT_SECRET (key used for signing auth tokens)
+# - CRON_SECRET (token used to secure cron HTTP endpoints)
