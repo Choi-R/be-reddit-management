@@ -32,7 +32,7 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL, -- Format: salt:sha256_hash
-    paypal TEXT NOT NULL,
+    paypal TEXT,
     reddit TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
@@ -146,3 +146,17 @@ INSERT INTO users (id, email, password, paypal, reddit) VALUES
 -- Associate user with 'admin' role
 INSERT INTO user_roles (user_id, role_id) VALUES
 ('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin');
+
+-- Seed: Rahmaditya Admin User (Password Raw: rahmadityac@gmail.com)
+INSERT INTO users (id, email, password, paypal, reddit) VALUES
+('b1e86950-8b1e-450f-a7b3-241517454f01', 'rahmadityac@gmail.com', 'seedsalt1234:a7c0e615071295699d004477d022eed1dbb9bfcb70ada633e3867b2905d23d69', NULL, 'reddit_rahmadityac');
+
+INSERT INTO user_roles (user_id, role_id) VALUES
+('b1e86950-8b1e-450f-a7b3-241517454f01', 'admin');
+
+-- Seed: Kellirun Admin User (Password Raw: kb.kellirun@gmail.com)
+INSERT INTO users (id, email, password, paypal, reddit) VALUES
+('c1e86950-8b1e-450f-a7b3-241517454f02', 'kb.kellirun@gmail.com', 'seedsalt1234:a3c4eb604947b1910a9a501ce3ab02df71b885126fa38046c96cca5f42484af9', NULL, 'reddit_kb_kellirun');
+
+INSERT INTO user_roles (user_id, role_id) VALUES
+('c1e86950-8b1e-450f-a7b3-241517454f02', 'admin');

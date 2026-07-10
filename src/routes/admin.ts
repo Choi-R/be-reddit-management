@@ -32,8 +32,8 @@ function validateStringField(value: unknown, name: string, maxLength = 1000): vo
 admin.post('/users', async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
-    if (!body || !body.email || !body.password || !body.paypal || !body.reddit) {
-      throw new BusinessError('MISSING_FIELD', 'Email, password, paypal address, and reddit username are required');
+    if (!body || !body.email || !body.password || !body.reddit) {
+      throw new BusinessError('MISSING_FIELD', 'Email, password, and reddit username are required');
     }
 
     const { email, password, paypal, reddit } = body;
@@ -44,7 +44,9 @@ admin.post('/users', async (c) => {
     if (password.length < 8) {
       throw new BusinessError('INVALID_INPUT', 'Password must be at least 8 characters');
     }
-    validateEmail(paypal);
+    if (paypal) {
+      validateEmail(paypal);
+    }
     validateStringField(reddit, 'Reddit username', 100);
 
     const pool = getDbPool(c.env.DATABASE_URL);
@@ -64,7 +66,7 @@ admin.post('/users', async (c) => {
         `INSERT INTO users (email, password, paypal, reddit, created_at, updated_at)
          VALUES ($1, $2, $3, $4, NOW(), NOW())
          RETURNING id, email, paypal, reddit, created_at`,
-        [email, securePassword, paypal, reddit]
+        [email, securePassword, paypal || null, reddit]
       );
       
       const createdUser = userInsert.rows[0];
