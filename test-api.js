@@ -2,7 +2,10 @@
 // Execute locally with: node test-api.js [API_BASE_URL]
 // Default base URL: http://localhost:8787
 
-const baseUrl = process.argv[2] || 'http://localhost:8787';
+let baseUrl = process.argv[2] || 'http://localhost:8787';
+if (baseUrl.endsWith('/')) {
+  baseUrl = baseUrl.slice(0, -1);
+}
 console.log(`Starting E2E API Verification against: ${baseUrl}\n`);
 
 // Global variables to store session tokens and IDs
@@ -107,7 +110,7 @@ async function runTests() {
       headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         subreddit: 'reactjs',
-        postUrl: 'https://reddit.com/r/reactjs/comments/example',
+        url: 'https://reddit.com/r/reactjs/comments/example',
         clientRequest: 'Leave a detailed review of the new Vite setup features.',
         quota: 2,
         price: 7.50,

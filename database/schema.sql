@@ -67,8 +67,8 @@ CREATE TABLE task_status (
 -- Table: tasks
 CREATE TABLE tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    subreddit TEXT NOT NULL,
-    post_url TEXT,
+    subreddit TEXT,
+    url TEXT NOT NULL,
     client_request TEXT NOT NULL,
     quota INTEGER CHECK (quota >= 0) NOT NULL,
     assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -138,10 +138,10 @@ INSERT INTO task_status (id, status_name) VALUES
 -- Email: admin@redditcrm.com
 -- Password Raw: AdminCRM2026!
 -- Salt: seedsalt1234
--- Salted Hash (SHA-256 of "AdminCRM2026!seedsalt1234"): bbd9859f71c4c8141315b822d64f0612198032ea70abde5e00318080f55cf66d
--- Final password entry format: seedsalt1234:bbd9859f71c4c8141315b822d64f0612198032ea70abde5e00318080f55cf66d
+-- Salted Hash (SHA-256 of "AdminCRM2026!seedsalt1234"): 4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
+-- Final password entry format: seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
 INSERT INTO users (id, email, password, paypal, reddit) VALUES
-('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:bbd9859f71c4c8141315b822d64f0612198032ea70abde5e00318080f55cf66d', 'admin@paypal.com', 'reddit_admin');
+('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82', 'admin@paypal.com', 'reddit_admin');
 
 -- Associate user with 'admin' role
 INSERT INTO user_roles (user_id, role_id) VALUES

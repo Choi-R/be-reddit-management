@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { getDbPool, withTransaction } from '../db/connection';
 import { authMiddleware } from '../middleware/auth';
+import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
 
 const tasks = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -20,7 +21,7 @@ tasks.get('/available', async (c) => {
     // - Task is either unassigned or assigned explicitly to the current user
     // - User has no booking history for this task
     const availableTasks = await pool.query(
-      `SELECT t.id, t.subreddit, t.post_url, t.client_request, t.quota, t.price, t.deadline, tt.type_name
+      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, t.price, t.deadline, tt.type_name
        FROM tasks t
        JOIN task_types tt ON t.type_id = tt.id
        WHERE t.quota > 0
@@ -49,9 +50,9 @@ tasks.get('/available', async (c) => {
       available: availableTasks.rows,
       active: activeTask.rows[0] || null
     });
-  } catch (error: any) {
-    console.error('Fetch available tasks error:', error);
-    return c.json({ error: 'Internal Server Error' }, 500);
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Fetch available tasks error');
+    return c.json(body, status);
   }
 });
 
@@ -61,10 +62,14 @@ tasks.post('/book', async (c) => {
     const user = c.get('user')!;
     const body = await c.req.json().catch(() => null);
     if (!body || !body.taskId) {
-      return c.json({ error: 'Task ID is required' }, 400);
+      throw new BusinessError('MISSING_FIELD', 'Task ID is required');
     }
 
     const { taskId } = body;
+    if (typeof taskId !== 'string' || taskId.length > 100) {
+      throw new BusinessError('INVALID_INPUT', 'Task ID must be a valid string');
+    }
+
     const pool = getDbPool(c.env.DATABASE_URL);
 
     // Run transaction to prevent race conditions (double bookings)
@@ -77,7 +82,7 @@ tasks.post('/book', async (c) => {
         [user.id]
       );
       if (activeCheck.rows.length > 0) {
-        throw new Error('LIMIT_EXCEEDED: You can only perform one task at a time.');
+        throw new BusinessError('LIMIT_EXCEEDED', 'You can only perform one task at a time.');
       }
 
       // B. Check if user already did this task previously
@@ -86,7 +91,7 @@ tasks.post('/book', async (c) => {
         [user.id, taskId]
       );
       if (historyCheck.rows.length > 0) {
-        throw new Error('ALREADY_ATTEMPTED: You cannot perform the same task more than once.');
+        throw new BusinessError('ALREADY_ATTEMPTED', 'You cannot perform the same task more than once.');
       }
 
       // C. Lock task row to check and decrement quota safely
@@ -95,20 +100,20 @@ tasks.post('/book', async (c) => {
         [taskId]
       );
       if (taskCheck.rows.length === 0) {
-        throw new Error('NOT_FOUND: Task not found.');
+        throw new BusinessError('NOT_FOUND', 'Task not found.');
       }
 
       const task = taskCheck.rows[0];
 
       // D. Verify task properties
       if (task.quota <= 0) {
-        throw new Error('NO_QUOTA: Task is no longer available.');
+        throw new BusinessError('NO_QUOTA', 'Task is no longer available.');
       }
       if (task.deadline && new Date(task.deadline) <= new Date()) {
-        throw new Error('EXPIRED: Task deadline has passed.');
+        throw new BusinessError('EXPIRED', 'Task deadline has passed.');
       }
       if (task.assigned_to && task.assigned_to !== user.id) {
-        throw new Error('FORBIDDEN: This task is assigned to another user.');
+        throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
       }
 
       // E. Decrement task quota
@@ -129,21 +134,9 @@ tasks.post('/book', async (c) => {
     });
 
     return c.json({ success: true, booking });
-  } catch (error: any) {
-    const msg = error.message || '';
-    if (
-      msg.startsWith('LIMIT_EXCEEDED') ||
-      msg.startsWith('ALREADY_ATTEMPTED') ||
-      msg.startsWith('NOT_FOUND') ||
-      msg.startsWith('NO_QUOTA') ||
-      msg.startsWith('EXPIRED') ||
-      msg.startsWith('FORBIDDEN')
-    ) {
-      const [code, desc] = msg.split(': ');
-      return c.json({ error: desc, code }, 400);
-    }
-    console.error('Book task transaction error:', error);
-    return c.json({ error: 'Internal Server Error' }, 500);
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Book task transaction error');
+    return c.json(body, status);
   }
 });
 
@@ -153,10 +146,26 @@ tasks.post('/submit', async (c) => {
     const user = c.get('user')!;
     const body = await c.req.json().catch(() => null);
     if (!body || !body.taskId || !body.replyUrl) {
-      return c.json({ error: 'Task ID and Reddit reply URL are required' }, 400);
+      throw new BusinessError('MISSING_FIELD', 'Task ID and Reddit reply URL are required');
     }
 
     const { taskId, replyUrl, note } = body;
+
+    // Validate URL format
+    try {
+      new URL(replyUrl);
+    } catch {
+      throw new BusinessError('INVALID_INPUT', 'Reply URL must be a valid URL');
+    }
+
+    // Validate field lengths
+    if (typeof replyUrl !== 'string' || replyUrl.length > 2000) {
+      throw new BusinessError('INVALID_INPUT', 'Reply URL is too long (max 2000 characters)');
+    }
+    if (note && (typeof note !== 'string' || note.length > 5000)) {
+      throw new BusinessError('INVALID_INPUT', 'Note is too long (max 5000 characters)');
+    }
+
     const pool = getDbPool(c.env.DATABASE_URL);
 
     // Update state to pending if it is currently incomplete
@@ -169,13 +178,13 @@ tasks.post('/submit', async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ error: 'No active incomplete booking found for this task' }, 400);
+      throw new BusinessError('NOT_FOUND', 'No active incomplete booking found for this task');
     }
 
     return c.json({ success: true, booking: result.rows[0] });
-  } catch (error: any) {
-    console.error('Submit task error:', error);
-    return c.json({ error: 'Internal Server Error' }, 500);
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Submit task error');
+    return c.json(body, status);
   }
 });
 
@@ -220,9 +229,9 @@ tasks.get('/earnings', async (c) => {
       paidBalance: parseFloat(paidRes.rows[0].balance),
       pendingBalance: parseFloat(pendingRes.rows[0].balance)
     });
-  } catch (error: any) {
-    console.error('Fetch earnings statistics error:', error);
-    return c.json({ error: 'Internal Server Error' }, 500);
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Fetch earnings statistics error');
+    return c.json(body, status);
   }
 });
 

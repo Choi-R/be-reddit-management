@@ -33,12 +33,16 @@ auth.post('/login', async (c) => {
     const rolesResult = await pool.query('SELECT role_id FROM user_roles WHERE user_id = $1', [user.id]);
     const roles = rolesResult.rows.map((row: any) => row.role_id);
 
-    // 4. Sign standard-compliant JWT token valid for 7 days
+    // 4. Sign standard-compliant JWT token valid for 24 hours
+    const now = Math.floor(Date.now() / 1000);
     const payload = {
       id: user.id,
       email: user.email,
       roles: roles,
-      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7,
+      iss: 'reddit-crm-api',
+      aud: 'reddit-crm-client',
+      iat: now,
+      exp: now + 60 * 60 * 24,
     };
     const token = await sign(payload, c.env.JWT_SECRET);
 

@@ -10,7 +10,14 @@ const app = new Hono<{ Bindings: Env }>();
 
 // Enable CORS for frontend integration
 app.use('/api/*', cors({
-  origin: '*', // Restrict to front-end domain in production
+  origin: (origin, c) => {
+    const allowed = c.env.FRONTEND_URL || 'https://reddit-management.choi.web.id';
+    // Allow the configured frontend origin and localhost for development
+    if (origin === allowed || origin?.startsWith('http://localhost')) {
+      return origin;
+    }
+    return null;
+  },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
   exposeHeaders: ['Content-Length'],
