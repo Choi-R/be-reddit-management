@@ -51,20 +51,30 @@ You should see:
 
 ---
 
-## Production Edge Deployment
+## Production Deployment via GitHub Actions
 
-When you are ready to publish the backend to Cloudflare's edge:
+This repository is configured with a GitHub Actions workflow to build and deploy the API automatically to Cloudflare Workers on every `git push` to `master` or `main`.
 
-1. Deploy the compiled bundle:
+### 1. Configure Cloudflare API Token in GitHub
+To authorize GitHub to deploy to your Cloudflare account:
+1. Log in to your [Cloudflare Dashboard](https://dash.cloudflare.com/) and go to **My Profile > API Tokens**.
+2. Click **Create Token** and select the **Edit Cloudflare Workers** template.
+3. Keep the default permissions (Workers: Write, Account Settings: Read) and copy the generated token.
+4. Go to your GitHub repository (**Choi-R/be-reddit-management**).
+5. Navigate to **Settings > Secrets and variables > Actions > New repository secret**.
+6. Name the secret **`CLOUDFLARE_API_TOKEN`** and paste your API token.
+
+### 2. Configure Production Database Secrets
+Secrets must be stored securely on Cloudflare so they are not committed to code history:
+1. Inside your Cloudflare Workers Dashboard, select your deployed **be-reddit-management** worker.
+2. Go to **Settings > Variables > Variables and Secrets** (or run these once in your terminal):
    ```bash
-   npx wrangler deploy
+   npx wrangler secret put DATABASE_URL  # Enter your Neon connection string
+   npx wrangler secret put JWT_SECRET     # Enter your JWT signature passphrase
+   npx wrangler secret put CRON_SECRET    # Enter your Cron cleanup token
    ```
-2. Upload environment secrets to Cloudflare (do not store passwords/keys in files in Git):
-   ```bash
-   npx wrangler secret put DATABASE_URL
-   npx wrangler secret put JWT_SECRET
-   npx wrangler secret put CRON_SECRET
-   ```
-3. Cloudflare will automatically activate the Cron Trigger (defined in `wrangler.toml`) to execute hourly task sweeps in production.
+
+### 3. Automated Release
+When you run `git push origin master`, the action at `.github/workflows/deploy.yml` compiles your Hono script, bundles it, deploys the public API endpoints, and schedules the hourly Cron trigger sweep.
 
 ---
