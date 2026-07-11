@@ -17,7 +17,7 @@ cron.post('/cleanup', async (c) => {
 
     // Execute queries in a single transaction block for full database safety
     const cleanupSummary = await withTransaction(pool, async (client) => {
-      // CTE 1: Expiration of 12-Hour Bookings
+      // CTE 1: Expiration of 60-Hour Bookings
       // Deletes user_tasks matching criteria and increments the related task quota
       const expirationResult = await client.query(`
         WITH deleted_tasks AS (
@@ -25,7 +25,7 @@ cron.post('/cleanup', async (c) => {
             USING tasks t
             WHERE ut.task_id = t.id
               AND ut.status_id = 'incomplete'
-              AND ut.created_at < NOW() - INTERVAL '12 hours'
+              AND ut.created_at < NOW() - INTERVAL '60 hours'
               AND t.assigned_to IS NULL
             RETURNING ut.task_id, ut.id as booking_id
         ),

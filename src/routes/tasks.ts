@@ -35,20 +35,20 @@ tasks.get('/available', async (c) => {
       [user.id]
     );
 
-    // Fetch active task (if any) to help frontend manage states (e.g. show booking warning)
+    // Fetch active tasks (up to 2) to help frontend manage states (e.g. show booking warning)
     const activeTask = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.created_at as booked_at, t.*, tt.type_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        JOIN task_types tt ON t.type_id = tt.id
        WHERE ut.user_id = $1 AND ut.status_id IN ('incomplete', 'pending')
-       LIMIT 1`,
+       LIMIT 2`,
       [user.id]
     );
 
     return c.json({
       available: availableTasks.rows,
-      active: activeTask.rows[0] || null
+      active: activeTask.rows
     });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Fetch available tasks error');
@@ -74,15 +74,14 @@ tasks.post('/book', async (c) => {
 
     // Run transaction to prevent race conditions (double bookings)
     const booking = await withTransaction(pool, async (client) => {
-      // A. Check if the user has an active booking (incomplete/pending)
+      // A. Check if the user has active bookings (incomplete/pending)
       const activeCheck = await client.query(
-        `SELECT 1 FROM user_tasks 
-         WHERE user_id = $1 AND status_id IN ('incomplete', 'pending')
-         LIMIT 1`,
+        `SELECT COUNT(*)::int as count FROM user_tasks 
+         WHERE user_id = $1 AND status_id IN ('incomplete', 'pending')`,
         [user.id]
       );
-      if (activeCheck.rows.length > 0) {
-        throw new BusinessError('LIMIT_EXCEEDED', 'You can only perform one task at a time.');
+      if (activeCheck.rows[0].count >= 2) {
+        throw new BusinessError('LIMIT_EXCEEDED', 'You can only perform at most 2 tasks at a time.');
       }
 
       // B. Check if user already did this task previously

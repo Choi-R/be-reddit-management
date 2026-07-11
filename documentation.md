@@ -52,7 +52,7 @@ Authenticates a user and returns a session JWT.
 ### 2. Basic User Dashboard APIs
 
 #### `GET /api/tasks/available`
-Fetches tasks currently available for booking, along with the user's active task (if any).
+Fetches tasks currently available for booking, along with the user's active tasks (if any).
 * **Headers**: `Authorization: Bearer <token>`
 * **Success Response (200 OK)**:
   ```json
@@ -69,7 +69,7 @@ Fetches tasks currently available for booking, along with the user's active task
         "type_name": "Normal"
       }
     ],
-    "active": null
+    "active": []
   }
   ```
 
@@ -101,7 +101,7 @@ Atomically books an available task. Decrements the task quota.
 * **Error Response (400 Bad Request)**:
   ```json
   {
-    "error": "You can only perform one task at a time.",
+    "error": "You can only perform at most 2 tasks at a time.",
     "code": "LIMIT_EXCEEDED"
   }
   ```
