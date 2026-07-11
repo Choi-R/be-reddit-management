@@ -8,6 +8,19 @@ import { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Block search engine crawlers and AI bots, and set X-Robots-Tag header
+const BLOCKED_BOTS_REGEX = /gptbot|chatgpt-user|google-extended|anthropic-ai|claudebot|perplexity|ccbot|cohere-ai|googlebot|bingbot|slurp|duckduckbot|yandexbot|baiduspider|sogou|exabot|facebot|ia_archiver/i;
+
+app.use('*', async (c, next) => {
+  const userAgent = c.req.header('User-Agent') || '';
+  if (BLOCKED_BOTS_REGEX.test(userAgent)) {
+    return c.text('Forbidden: Crawler / Bot access is denied.', 403);
+  }
+  
+  c.header('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  await next();
+});
+
 // Enable CORS for frontend integration
 app.use('/api/*', cors({
   origin: (origin, c) => {
