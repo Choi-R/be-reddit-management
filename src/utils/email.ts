@@ -10,9 +10,9 @@ export async function sendResetPasswordEmail(
   token: string,
   env: Env
 ): Promise<any> {
-  const apiKey = env.RESEND_API_KEY || (env.SMTP_HOST === 'smtp.resend.com' ? env.SMTP_PASSWORD : null);
-  const fromEmail = env.SMTP_FROM || 'onboarding@resend.dev';
-  const frontendUrl = env.FRONTEND_URL || 'http://localhost:5173';
+  const apiKey = env.RESEND_API_KEY || env.VITE_RESEND_API_KEY || (env.SMTP_HOST === 'smtp.resend.com' ? env.SMTP_PASSWORD : env.VITE_SMTP_HOST === 'smtp.resend.com' ? env.VITE_SMTP_PASSWORD : null);
+  const fromEmail = env.SMTP_FROM || env.VITE_SMTP_FROM || 'onboarding@resend.dev';
+  const frontendUrl = env.FRONTEND_URL || env.VITE_FRONTEND_URL || 'http://localhost:5173';
   const resetLink = `${frontendUrl}/reset-password?token=${token}`;
   const subject = 'Reset Your Reddit Tasks CRM Password';
 

@@ -24,7 +24,7 @@ app.use('*', async (c, next) => {
 // Enable CORS for frontend integration
 app.use('/api/*', cors({
   origin: (origin, c) => {
-    const allowed = c.env.FRONTEND_URL || 'https://reddit-management.choi.web.id';
+    const allowed = c.env.FRONTEND_URL || c.env.VITE_FRONTEND_URL || 'https://reddit-management.choi.web.id';
     // Allow the configured frontend origin and localhost for development
     if (origin === allowed || origin?.startsWith('http://localhost')) {
       return origin;
