@@ -175,8 +175,106 @@ admin.get('/users', async (c) => {
   }
 });
 
+// 1b. Update a Basic User account
+admin.put('/users/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.email || !body.reddit) {
+      throw new BusinessError('MISSING_FIELD', 'Email and Reddit username/link are required');
+    }
+
+    const { email, password, paypal, reddit } = body;
+
+    // Validate inputs
+    validateEmail(email);
+    if (password) {
+      validateStringField(password, 'Password', 128);
+      if (password.length < 8) {
+        throw new BusinessError('INVALID_INPUT', 'Password must be at least 8 characters');
+      }
+    }
+    if (paypal) {
+      validateEmail(paypal);
+    }
+    // Allow up to 500 characters in case they entered a full Reddit profile URL
+    validateStringField(reddit, 'Reddit username', 500);
+
+    const cleanReddit = extractRedditUsername(reddit);
+    if (cleanReddit.length === 0 || cleanReddit.length > 100) {
+      throw new BusinessError('INVALID_INPUT', 'A valid Reddit username or profile link is required');
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // Verify user exists and check if email is unique
+    const userCheck = await pool.query('SELECT email FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const emailCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND id <> $2 LIMIT 1', [email, id]);
+    if (emailCheck.rows.length > 0) {
+      throw new BusinessError('DUPLICATE', 'User with this email already exists');
+    }
+
+    let query: string;
+    let params: any[];
+
+    if (password) {
+      const securePassword = await createPasswordHash(password);
+      query = `UPDATE users 
+               SET email = $1, password = $2, paypal = $3, reddit = $4, updated_at = NOW() 
+               WHERE id = $5 
+               RETURNING id, email, paypal, reddit, created_at`;
+      params = [email, securePassword, paypal || null, cleanReddit, id];
+    } else {
+      query = `UPDATE users 
+               SET email = $1, paypal = $2, reddit = $3, updated_at = NOW() 
+               WHERE id = $4 
+               RETURNING id, email, paypal, reddit, created_at`;
+      params = [email, paypal || null, cleanReddit, id];
+    }
+
+    const result = await pool.query(query, params);
+    return c.json({ success: true, user: result.rows[0] });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin update user error');
+    return c.json(body, status);
+  }
+});
+
+// 1c. Delete a Basic User account
+admin.delete('/users/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const currentUser = c.get('user');
+
+    if (currentUser && currentUser.id === id) {
+      throw new BusinessError('INVALID_OPERATION', 'You cannot delete your own admin account');
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // Verify user is a 'basic' user (or at least check that they exist)
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    // Delete the user (this cascades deletes to user_roles, user_tasks, password_resets)
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+
+    return c.json({ success: true, message: 'User deleted successfully' });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin delete user error');
+    return c.json(body, status);
+  }
+});
+
 // Helper to resolve user ID from email, reddit username, or UUID string
 async function resolveUserId(pool: any, identifier: string | null | undefined): Promise<string | null> {
+
   if (!identifier || identifier.trim() === '') {
     return null;
   }
