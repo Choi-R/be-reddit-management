@@ -29,6 +29,35 @@ function validateStringField(value: unknown, name: string, maxLength = 1000): vo
   }
 }
 
+/**
+ * Extracts the raw Reddit username from a profile URL or a prefixed string (e.g. u/username).
+ */
+export function extractRedditUsername(input: string): string {
+  if (!input) return '';
+  let cleaned = input.trim();
+
+  // Strip protocol, host, and optional subdomain
+  cleaned = cleaned.replace(/^(https?:\/\/)?(www\.)?reddit\.com\//i, '');
+
+  // Strip leading slash
+  cleaned = cleaned.replace(/^\//, '');
+
+  // Strip leading user/ or u/
+  if (cleaned.toLowerCase().startsWith('user/')) {
+    cleaned = cleaned.substring(5);
+  } else if (cleaned.toLowerCase().startsWith('u/')) {
+    cleaned = cleaned.substring(2);
+  }
+
+  // Take the first segment (strip trailing slashes/subpaths)
+  cleaned = cleaned.split('/')[0];
+
+  // Strip any remaining u/ prefix (for cases like "u/john_doe" without a URL)
+  cleaned = cleaned.replace(/^\/?u\//i, '');
+
+  return cleaned.trim();
+}
+
 // 1. Create a Basic User account
 admin.post('/users', async (c) => {
   try {
@@ -48,7 +77,13 @@ admin.post('/users', async (c) => {
     if (paypal) {
       validateEmail(paypal);
     }
-    validateStringField(reddit, 'Reddit username', 100);
+    // Allow up to 500 characters in case they entered a full Reddit profile URL
+    validateStringField(reddit, 'Reddit username', 500);
+
+    const cleanReddit = extractRedditUsername(reddit);
+    if (cleanReddit.length === 0 || cleanReddit.length > 100) {
+      throw new BusinessError('INVALID_INPUT', 'A valid Reddit username or profile link is required');
+    }
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
@@ -67,7 +102,7 @@ admin.post('/users', async (c) => {
         `INSERT INTO users (email, password, paypal, reddit, created_at, updated_at)
          VALUES ($1, $2, $3, $4, NOW(), NOW())
          RETURNING id, email, paypal, reddit, created_at`,
-        [email, securePassword, paypal || null, reddit]
+        [email, securePassword, paypal || null, cleanReddit]
       );
       
       const createdUser = userInsert.rows[0];
@@ -83,7 +118,7 @@ admin.post('/users', async (c) => {
 
     // Send email notification to new user
     try {
-      await sendNewUserNotificationEmail(email, reddit, c.env);
+      await sendNewUserNotificationEmail(email, cleanReddit, c.env);
     } catch (emailError) {
       console.error('Failed to send registration email notification:', emailError);
     }
@@ -147,8 +182,7 @@ async function resolveUserId(pool: any, identifier: string | null | undefined): 
   }
 
   const cleanVal = identifier.trim();
-  // Strip u/ or /u/ prefix from reddit usernames
-  const strippedReddit = cleanVal.replace(/^\/?u\//i, '');
+  const strippedReddit = extractRedditUsername(cleanVal);
 
   const userRes = await pool.query(
     `SELECT id FROM users 
