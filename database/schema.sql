@@ -160,3 +160,18 @@ INSERT INTO users (id, email, password, paypal, reddit) VALUES
 
 INSERT INTO user_roles (user_id, role_id) VALUES
 ('c1e86950-8b1e-450f-a7b3-241517454f02', 'admin');
+
+-- -------------------------------------------------------------
+-- 6. Password Reset Tokens Table
+-- -------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS password_resets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT REFERENCES users(email) ON DELETE CASCADE NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX idx_password_resets_token ON password_resets(token);
+CREATE INDEX idx_password_resets_expires ON password_resets(expires_at);
+

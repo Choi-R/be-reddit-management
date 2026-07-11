@@ -2,11 +2,38 @@
 // Execute locally with: node test-api.js [API_BASE_URL]
 // Default base URL: http://localhost:8787
 
+const { Client } = require('pg');
+const fs = require('fs');
+const path = require('path');
+
 let baseUrl = process.argv[2] || 'http://localhost:8787';
 if (baseUrl.endsWith('/')) {
   baseUrl = baseUrl.slice(0, -1);
 }
 console.log(`Starting E2E API Verification against: ${baseUrl}\n`);
+
+// Parse connection URL from .env for direct DB checks during tests
+let databaseUrl = '';
+try {
+  const envContent = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
+  const lines = envContent.split('\n');
+  for (const line of lines) {
+    if (line.includes('DATABASE_URL=')) {
+      if (line.startsWith('postgresql://DATABASE_URL=')) {
+        databaseUrl = line.replace('postgresql://DATABASE_URL=', 'postgresql://');
+      } else {
+        const match = line.match(/DATABASE_URL=["']?([^"'\s]+)["']?/);
+        if (match) {
+          databaseUrl = match[1];
+        }
+      }
+    } else if (line.trim().startsWith('postgresql://')) {
+      databaseUrl = line.trim();
+    }
+  }
+} catch (err) {
+  console.warn('⚠️ Could not load database URL from .env. Some direct DB assertions will be skipped.');
+}
 
 // Global variables to store session tokens and IDs
 let adminToken = '';
@@ -264,6 +291,66 @@ async function runTests() {
       throw new Error(`Payout sums are incorrect. Expected Pending: $0, Paid: $7.50. Got Pending: $${postBalances.pendingBalance}, Paid: $${postBalances.paidBalance}`);
     }
     console.log('✅ Pending balance reset to $0 and Paid balance correctly aggregated.\n');
+
+    // -------------------------------------------------------------
+    // Step 13: Forgot & Reset Password Flow
+    // -------------------------------------------------------------
+    console.log('Step 13: Testing Forgot & Reset Password flow...');
+    console.log(`Requesting password reset link for: ${testEmail}`);
+    const forgotRes = await apiRequest('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email: testEmail }),
+    });
+
+    if (forgotRes.status !== 200) {
+      throw new Error(`Forgot password request failed: ${JSON.stringify(forgotRes.data)}`);
+    }
+    console.log('✅ Forgot password link requested successfully.');
+
+    // Connect to database to get the reset token directly
+    let resetToken = '';
+    if (databaseUrl) {
+      console.log('Retrieving reset token from database...');
+      const dbClient = new Client({
+        connectionString: databaseUrl,
+        ssl: { rejectUnauthorized: false }
+      });
+      await dbClient.connect();
+      const tokenRes = await dbClient.query('SELECT token FROM password_resets WHERE email = $1', [testEmail]);
+      await dbClient.end();
+      if (tokenRes.rows.length === 0) {
+        throw new Error('Reset token was not found in the database.');
+      }
+      resetToken = tokenRes.rows[0].token;
+      console.log(`✅ Token successfully retrieved: ${resetToken}`);
+    } else {
+      throw new Error('Database connection string not configured in tests, cannot retrieve reset token.');
+    }
+
+    // Reset the password
+    const newPassword = 'NewCoolPassword2026!';
+    console.log('Submitting new password reset request...');
+    const resetRes = await apiRequest('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token: resetToken, password: newPassword }),
+    });
+
+    if (resetRes.status !== 200) {
+      throw new Error(`Password reset failed: ${JSON.stringify(resetRes.data)}`);
+    }
+    console.log('✅ Password reset succeeded.');
+
+    // Authenticate with the new password
+    console.log('Verifying login with the new password...');
+    const verifyLoginRes = await apiRequest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: testEmail, password: newPassword }),
+    });
+
+    if (verifyLoginRes.status !== 200) {
+      throw new Error(`Authentication with new password failed: ${JSON.stringify(verifyLoginRes.data)}`);
+    }
+    console.log('✅ Successfully authenticated using the new password!');
 
     console.log('🎉 ALL INTEGRATION TESTS PASSED SUCCESSFULLY! The backend is 100% functional.');
   } catch (error) {

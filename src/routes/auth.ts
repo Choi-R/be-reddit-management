@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
 import { getDbPool } from '../db/connection';
-import { verifyPassword } from '../utils/crypto';
+import { verifyPassword, createPasswordHash } from '../utils/crypto';
+import { sendResetPasswordEmail } from '../utils/email';
 import { Env } from '../types';
 
 const auth = new Hono<{ Bindings: Env }>();
@@ -58,6 +59,102 @@ auth.post('/login', async (c) => {
     });
   } catch (error: any) {
     console.error('Auth login handler error:', error);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+});
+
+auth.post('/forgot-password', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.email) {
+      return c.json({ error: 'Email is required' }, 400);
+    }
+
+    const { email } = body;
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // 1. Verify if user exists
+    const userResult = await pool.query('SELECT id, email FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      // For security and user privacy, respond with success even if the email does not exist
+      return c.json({
+        success: true,
+        message: 'If the email is registered, a password reset link has been sent.',
+      });
+    }
+
+    // 2. Generate a cryptographically secure token
+    const tokenBytes = new Uint8Array(20);
+    crypto.getRandomValues(tokenBytes);
+    const token = Array.from(tokenBytes, b => b.toString(16).padStart(2, '0')).join('');
+
+    // 3. Clear existing tokens and insert a new one with 1 hour expiration
+    await pool.query('DELETE FROM password_resets WHERE email = $1', [email]);
+    await pool.query(
+      `INSERT INTO password_resets (email, token, expires_at)
+       VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+      [email, token]
+    );
+
+    // 4. Send the reset password email
+    await sendResetPasswordEmail(email, token, c.env);
+
+    return c.json({
+      success: true,
+      message: 'Password reset link has been sent to your email.',
+    });
+  } catch (error: any) {
+    console.error('Forgot password endpoint error:', error);
+    return c.json({ error: error.message || 'Internal Server Error' }, 500);
+  }
+});
+
+auth.post('/reset-password', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.token || !body.password) {
+      return c.json({ error: 'Token and new password are required' }, 400);
+    }
+
+    const { token, password } = body;
+    if (password.length < 8) {
+      return c.json({ error: 'Password must be at least 8 characters long' }, 400);
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // 1. Retrieve valid token
+    const resetResult = await pool.query(
+      'SELECT email, expires_at FROM password_resets WHERE token = $1 AND expires_at > NOW()',
+      [token]
+    );
+
+    if (resetResult.rows.length === 0) {
+      return c.json({ error: 'The password reset link is invalid or has expired.' }, 400);
+    }
+
+    const { email } = resetResult.rows[0];
+
+    // 2. Generate a new password hash
+    const hashedPassword = await createPasswordHash(password);
+
+    // 3. Update password and delete reset tokens inside a transaction
+    await pool.query('BEGIN');
+    try {
+      await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
+      await pool.query('DELETE FROM password_resets WHERE email = $1', [email]);
+      await pool.query('COMMIT');
+    } catch (dbError) {
+      await pool.query('ROLLBACK');
+      throw dbError;
+    }
+
+    return c.json({
+      success: true,
+      message: 'Your password has been successfully reset.',
+    });
+  } catch (error: any) {
+    console.error('Reset password endpoint error:', error);
     return c.json({ error: 'Internal Server Error' }, 500);
   }
 });
