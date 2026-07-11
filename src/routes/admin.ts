@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth';
 import { createPasswordHash } from '../utils/crypto';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
+import { sendNewUserNotificationEmail } from '../utils/email';
 
 const admin = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -79,6 +80,13 @@ admin.post('/users', async (c) => {
 
       return createdUser;
     });
+
+    // Send email notification to new user
+    try {
+      await sendNewUserNotificationEmail(email, reddit, c.env);
+    } catch (emailError) {
+      console.error('Failed to send registration email notification:', emailError);
+    }
 
     return c.json({ success: true, user: newUser });
   } catch (error: unknown) {
