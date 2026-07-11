@@ -25,9 +25,12 @@ jobs:
             CRON_SECRET
             RESEND_API_KEY
             FRONTEND_URL
+            SMTP_FROM
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+
