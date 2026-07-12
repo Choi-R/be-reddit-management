@@ -189,6 +189,61 @@ async function runTests() {
     console.log(`✅ Task booked successfully. Booking status is: ${bookRes.data.booking.status_id}\n`);
 
     // -------------------------------------------------------------
+    // Step 6.5: Cancel and Re-book Test (Second-Thought Flow)
+    // -------------------------------------------------------------
+    console.log('Step 6.5: Testing booking cancellation (second-thought) flow...');
+    
+    // A. Cancel the booking
+    const cancelRes = await apiRequest('/api/tasks/cancel', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${basicToken}` },
+      body: JSON.stringify({ taskId }),
+    });
+
+    if (cancelRes.status !== 200) {
+      throw new Error(`Failed to cancel booking: ${JSON.stringify(cancelRes.data)}`);
+    }
+    console.log('✅ Booking cancelled successfully on backend.');
+
+    // B. Verify task is available again and quota is restored to 2
+    const checkAvailableRes = await apiRequest('/api/tasks/available', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${basicToken}` },
+    });
+    const taskAfterCancel = checkAvailableRes.data.available.find(t => t.id === taskId);
+    if (!taskAfterCancel) {
+      throw new Error('Task is not showing up in Available list after cancellation.');
+    }
+    if (taskAfterCancel.quota !== 2) {
+      throw new Error(`Expected quota to be restored to 2, but got ${taskAfterCancel.quota}`);
+    }
+    console.log('✅ Task reappeared in available list and quota restored to 2.');
+
+    // C. Verify attempting to cancel again returns an error (since booking is gone)
+    const cancelAgainRes = await apiRequest('/api/tasks/cancel', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${basicToken}` },
+      body: JSON.stringify({ taskId }),
+    });
+    if (cancelAgainRes.status === 200) {
+      throw new Error('Failed validation: allowed cancelling booking that does not exist.');
+    }
+    console.log('✅ Secondary cancellation rejected correctly.');
+
+    // D. Re-book the task for subsequent test steps
+    console.log('Re-booking task for remaining test steps...');
+    const rebookRes = await apiRequest('/api/tasks/book', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${basicToken}` },
+      body: JSON.stringify({ taskId }),
+    });
+    if (rebookRes.status !== 200) {
+      throw new Error(`Failed to re-book task: ${JSON.stringify(rebookRes.data)}`);
+    }
+    bookingId = rebookRes.data.booking.id;
+    console.log('✅ Task re-booked successfully.\n');
+
+    // -------------------------------------------------------------
     // Step 7: Double-booking Prevention Check
     // -------------------------------------------------------------
     console.log('Step 7: Verifying double-booking lock rules...');

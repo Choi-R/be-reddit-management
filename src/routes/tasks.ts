@@ -139,6 +139,65 @@ tasks.post('/book', async (c) => {
   }
 });
 
+// 3. Cancel task booking atomically (second-thought)
+tasks.post('/cancel', async (c) => {
+  try {
+    const user = c.get('user')!;
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.taskId) {
+      throw new BusinessError('MISSING_FIELD', 'Task ID is required');
+    }
+
+    const { taskId } = body;
+    if (typeof taskId !== 'string' || taskId.length > 100) {
+      throw new BusinessError('INVALID_INPUT', 'Task ID must be a valid string');
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    await withTransaction(pool, async (client) => {
+      // A. Check if the user has an active incomplete booking for this task
+      const bookingCheck = await client.query(
+        `SELECT id FROM user_tasks 
+         WHERE user_id = $1 AND task_id = $2 AND status_id = 'incomplete'
+         FOR UPDATE`,
+        [user.id, taskId]
+      );
+
+      if (bookingCheck.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'No active incomplete booking found for this task.');
+      }
+
+      // B. Lock task row to update quota safely
+      const taskCheck = await client.query(
+        `SELECT id FROM tasks WHERE id = $1 FOR UPDATE`,
+        [taskId]
+      );
+
+      if (taskCheck.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'Task not found.');
+      }
+
+      // C. Delete the user_tasks record
+      await client.query(
+        `DELETE FROM user_tasks WHERE user_id = $1 AND task_id = $2 AND status_id = 'incomplete'`,
+        [user.id, taskId]
+      );
+
+      // D. Increment task quota
+      await client.query(
+        `UPDATE tasks SET quota = quota + 1, updated_at = NOW() WHERE id = $1`,
+        [taskId]
+      );
+    });
+
+    return c.json({ success: true });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Cancel task booking transaction error');
+    return c.json(body, status);
+  }
+});
+
 // 3. Submit task completion (reply URL)
 tasks.post('/submit', async (c) => {
   try {
