@@ -175,7 +175,7 @@ admin.get('/users', async (c) => {
   }
 });
 
-// 1b. Update a Basic User account
+// 1b. Update a Basic User account (Profile Info Only)
 admin.put('/users/:id', async (c) => {
   try {
     const id = c.req.param('id');
@@ -184,16 +184,10 @@ admin.put('/users/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email and Reddit username/link are required');
     }
 
-    const { email, password, paypal, reddit } = body;
+    const { email, paypal, reddit } = body;
 
     // Validate inputs
     validateEmail(email);
-    if (password) {
-      validateStringField(password, 'Password', 128);
-      if (password.length < 8) {
-        throw new BusinessError('INVALID_INPUT', 'Password must be at least 8 characters');
-      }
-    }
     if (paypal) {
       validateEmail(paypal);
     }
@@ -218,28 +212,57 @@ admin.put('/users/:id', async (c) => {
       throw new BusinessError('DUPLICATE', 'User with this email already exists');
     }
 
-    let query: string;
-    let params: any[];
-
-    if (password) {
-      const securePassword = await createPasswordHash(password);
-      query = `UPDATE users 
-               SET email = $1, password = $2, paypal = $3, reddit = $4, updated_at = NOW() 
-               WHERE id = $5 
-               RETURNING id, email, paypal, reddit, created_at`;
-      params = [email, securePassword, paypal || null, cleanReddit, id];
-    } else {
-      query = `UPDATE users 
-               SET email = $1, paypal = $2, reddit = $3, updated_at = NOW() 
-               WHERE id = $4 
-               RETURNING id, email, paypal, reddit, created_at`;
-      params = [email, paypal || null, cleanReddit, id];
-    }
+    const query = `UPDATE users 
+             SET email = $1, paypal = $2, reddit = $3, updated_at = NOW() 
+             WHERE id = $4 
+             RETURNING id, email, paypal, reddit, created_at`;
+    const params = [email, paypal || null, cleanReddit, id];
 
     const result = await pool.query(query, params);
     return c.json({ success: true, user: result.rows[0] });
   } catch (error: unknown) {
-    const { body, status } = handleRouteError(error, 'Admin update user error');
+    const { body, status } = handleRouteError(error, 'Admin update user profile error');
+    return c.json(body, status);
+  }
+});
+
+// 1d. Reset/Update User Password (Sensitive / High-Security Endpoint)
+admin.put('/users/:id/password', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.password) {
+      throw new BusinessError('MISSING_FIELD', 'Password is required');
+    }
+
+    const { password } = body;
+
+    // Validate password
+    validateStringField(password, 'Password', 128);
+    if (password.length < 8) {
+      throw new BusinessError('INVALID_INPUT', 'Password must be at least 8 characters');
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // Verify user exists
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const securePassword = await createPasswordHash(password);
+
+    await pool.query(
+      `UPDATE users 
+       SET password = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      [securePassword, id]
+    );
+
+    return c.json({ success: true, message: 'Password updated successfully' });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin update user password error');
     return c.json(body, status);
   }
 });
@@ -307,7 +330,15 @@ admin.post('/tasks', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, price, and typeId are required');
     }
 
-    const { subreddit, url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    const { url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    let subreddit = body.subreddit || null;
+
+    if (url) {
+      const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+      if (match) {
+        subreddit = match[1];
+      }
+    }
 
     // Validate inputs
     if (subreddit) {
@@ -390,7 +421,15 @@ admin.put('/tasks/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, price, and typeId are required');
     }
 
-    const { subreddit, url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    const { url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    let subreddit = body.subreddit || null;
+
+    if (url) {
+      const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+      if (match) {
+        subreddit = match[1];
+      }
+    }
 
     // Validate inputs
     if (subreddit) {
