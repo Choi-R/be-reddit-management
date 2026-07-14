@@ -35,14 +35,14 @@ tasks.get('/available', async (c) => {
       [user.id]
     );
 
-    // Fetch active tasks (up to 2) to help frontend manage states (e.g. show booking warning)
+    // Fetch active tasks to help frontend manage states (e.g. show booking warning)
     const activeTask = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.created_at as booked_at, t.*, tt.type_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        JOIN task_types tt ON t.type_id = tt.id
        WHERE ut.user_id = $1 AND ut.status_id IN ('incomplete', 'pending')
-       LIMIT 2`,
+       ORDER BY ut.created_at DESC`,
       [user.id]
     );
 
@@ -74,14 +74,14 @@ tasks.post('/book', async (c) => {
 
     // Run transaction to prevent race conditions (double bookings)
     const booking = await withTransaction(pool, async (client) => {
-      // A. Check if the user has active bookings (incomplete/pending)
+      // A. Check if the user has active bookings (incomplete)
       const activeCheck = await client.query(
         `SELECT COUNT(*)::int as count FROM user_tasks 
-         WHERE user_id = $1 AND status_id IN ('incomplete', 'pending')`,
+         WHERE user_id = $1 AND status_id = 'incomplete'`,
         [user.id]
       );
       if (activeCheck.rows[0].count >= 2) {
-        throw new BusinessError('LIMIT_EXCEEDED', 'You can only perform at most 2 tasks at a time.');
+        throw new BusinessError('LIMIT_EXCEEDED', 'You can only book at most 2 tasks at a time.');
       }
 
       // B. Check if user already did this task previously
