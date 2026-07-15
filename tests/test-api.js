@@ -42,6 +42,8 @@ let basicUserId = '';
 let taskId = '';
 let bookingId = '';
 
+const testIp = `192.168.10.${Math.floor(Math.random() * 254) + 1}`;
+
 // Helper to make API requests
 async function apiRequest(path, options = {}) {
   const url = `${baseUrl}${path}`;
@@ -49,6 +51,7 @@ async function apiRequest(path, options = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'CF-Connecting-IP': testIp,
       ...options.headers,
     },
   });
@@ -267,7 +270,7 @@ async function runTests() {
       headers: { Authorization: `Bearer ${basicToken}` },
       body: JSON.stringify({
         taskId,
-        replyUrl: 'https://reddit.com/r/reactjs/comments/example/reply/1234',
+        replyUrl: `https://reddit.com/r/reactjs/comments/example/reply/${Date.now()}`,
         note: 'Completed task with detailed Vite review.',
       }),
     });

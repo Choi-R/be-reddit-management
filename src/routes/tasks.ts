@@ -3,8 +3,16 @@ import { getDbPool, withTransaction } from '../db/connection';
 import { authMiddleware } from '../middleware/auth';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
+import { rateLimiter } from '../middleware/rateLimit';
 
 const tasks = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// Rate limiter for write operations (book, cancel, submit) - Max 10 requests per minute per user/IP
+const writeLimiter = rateLimiter({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: 'Too many booking or submission actions. Please wait a minute.'
+});
 
 // All routes in this module require a valid authenticated session
 tasks.use('/*', authMiddleware());
@@ -57,7 +65,7 @@ tasks.get('/available', async (c) => {
 });
 
 // 2. Book an available task atomically
-tasks.post('/book', async (c) => {
+tasks.post('/book', writeLimiter, async (c) => {
   try {
     const user = c.get('user')!;
     const body = await c.req.json().catch(() => null);
@@ -140,7 +148,7 @@ tasks.post('/book', async (c) => {
 });
 
 // 3. Cancel task booking atomically (second-thought)
-tasks.post('/cancel', async (c) => {
+tasks.post('/cancel', writeLimiter, async (c) => {
   try {
     const user = c.get('user')!;
     const body = await c.req.json().catch(() => null);
@@ -199,7 +207,7 @@ tasks.post('/cancel', async (c) => {
 });
 
 // 3. Submit task completion (reply URL)
-tasks.post('/submit', async (c) => {
+tasks.post('/submit', writeLimiter, async (c) => {
   try {
     const user = c.get('user')!;
     const body = await c.req.json().catch(() => null);
@@ -209,11 +217,22 @@ tasks.post('/submit', async (c) => {
 
     const { taskId, replyUrl, note } = body;
 
-    // Validate URL format
+    // Validate URL format, protocol, and domain
+    let parsedUrl: URL;
     try {
-      new URL(replyUrl);
+      parsedUrl = new URL(replyUrl);
     } catch {
       throw new BusinessError('INVALID_INPUT', 'Reply URL must be a valid URL');
+    }
+
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new BusinessError('INVALID_INPUT', 'Reply URL must use HTTP or HTTPS protocol');
+    }
+
+    const host = parsedUrl.hostname.toLowerCase();
+    const isRedditHost = host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it';
+    if (!isRedditHost) {
+      throw new BusinessError('INVALID_INPUT', 'Reply URL must be a reddit.com domain link');
     }
 
     // Validate field lengths
@@ -226,7 +245,39 @@ tasks.post('/submit', async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // Update state to pending if it is currently incomplete
+    // 1. Fetch task details to check subreddit restriction
+    const taskResult = await pool.query(
+      'SELECT subreddit FROM tasks WHERE id = $1',
+      [taskId]
+    );
+
+    if (taskResult.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'Task not found');
+    }
+    const taskSubreddit = taskResult.rows[0].subreddit;
+
+    // 2. Validate subreddit matching if restricted by the task
+    if (taskSubreddit) {
+      const pathParts = parsedUrl.pathname.split('/');
+      const rIdx = pathParts.findIndex(part => part.toLowerCase() === 'r');
+      if (rIdx === -1 || !pathParts[rIdx + 1] || pathParts[rIdx + 1].toLowerCase() !== taskSubreddit.toLowerCase()) {
+        throw new BusinessError(
+          'INVALID_INPUT',
+          `The submitted URL does not match the required subreddit. Expected: r/${taskSubreddit}`
+        );
+      }
+    }
+
+    // 3. Ensure the reply URL has not been submitted previously (duplicate prevention)
+    const duplicateCheck = await pool.query(
+      'SELECT 1 FROM user_tasks WHERE reply_url = $1 LIMIT 1',
+      [replyUrl]
+    );
+    if (duplicateCheck.rows.length > 0) {
+      throw new BusinessError('DUPLICATE_SUBMISSION', 'This Reddit URL has already been submitted for a task.');
+    }
+
+    // 4. Update state to pending if it is currently incomplete
     const result = await pool.query(
       `UPDATE user_tasks 
        SET status_id = 'pending', reply_url = $1, note = COALESCE($2, note), updated_at = NOW()

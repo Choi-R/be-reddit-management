@@ -5,6 +5,7 @@ import tasks from './routes/tasks';
 import admin from './routes/admin';
 import cron from './routes/cron';
 import { Env } from './types';
+import { rateLimiter } from './middleware/rateLimit';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -35,6 +36,13 @@ app.use('/api/*', cors({
   allowHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
   exposeHeaders: ['Content-Length'],
   maxAge: 600,
+}));
+
+// Global API rate limit: Max 60 requests per minute
+app.use('/api/*', rateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: 'Too many API requests. Please try again later.'
 }));
 
 // API Routes

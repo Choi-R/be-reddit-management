@@ -4,10 +4,18 @@ import { getDbPool } from '../db/connection';
 import { verifyPassword, createPasswordHash } from '../utils/crypto';
 import { sendResetPasswordEmail } from '../utils/email';
 import { Env } from '../types';
+import { rateLimiter } from '../middleware/rateLimit';
 
 const auth = new Hono<{ Bindings: Env }>();
 
-auth.post('/login', async (c) => {
+auth.post(
+  '/login',
+  rateLimiter({
+    windowMs: 5 * 60 * 1000,
+    max: 5,
+    message: 'Too many login attempts. Please try again after 5 minutes.'
+  }),
+  async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
     if (!body || !body.email || !body.password) {
@@ -63,7 +71,14 @@ auth.post('/login', async (c) => {
   }
 });
 
-auth.post('/forgot-password', async (c) => {
+auth.post(
+  '/forgot-password',
+  rateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 3,
+    message: 'Too many password reset requests. Please try again after 15 minutes.'
+  }),
+  async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
     if (!body || !body.email) {
@@ -109,7 +124,14 @@ auth.post('/forgot-password', async (c) => {
   }
 });
 
-auth.post('/reset-password', async (c) => {
+auth.post(
+  '/reset-password',
+  rateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    message: 'Too many password reset attempts. Please try again after 15 minutes.'
+  }),
+  async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
     if (!body || !body.token || !body.password) {

@@ -42,3 +42,6 @@ out/
 # OS metadata files
 .DS_Store
 Thumbs.db
+
+# Portfolio Prep
+backend_interview_prep.md
