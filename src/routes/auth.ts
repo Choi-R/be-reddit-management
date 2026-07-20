@@ -40,7 +40,31 @@ auth.post(
 
     // 3. Retrieve user roles
     const rolesResult = await pool.query('SELECT role_id FROM user_roles WHERE user_id = $1', [user.id]);
-    const roles = rolesResult.rows.map((row: any) => row.role_id);
+    let roles = rolesResult.rows.map((row: any) => row.role_id);
+
+    // Map 'basic' role to dynamic tier (bronze, silver, gold) based on completed tasks
+    const hasBasicOrBronze = roles.includes('basic') || roles.includes('bronze');
+    if (hasBasicOrBronze) {
+      const completedCheck = await pool.query(
+        `SELECT COUNT(*)::int as count FROM user_tasks 
+         WHERE user_id = $1 AND status_id IN ('success', 'paid')`,
+        [user.id]
+      );
+      const completedCount = completedCheck.rows[0].count;
+
+      let tier = 'bronze';
+      if (completedCount >= 15) {
+        tier = 'gold';
+      } else if (completedCount >= 5) {
+        tier = 'silver';
+      }
+
+      // Replace 'basic' with the computed tier
+      roles = roles.map((r: string) => r === 'basic' ? tier : r);
+      if (!roles.includes(tier)) {
+        roles.push(tier);
+      }
+    }
 
     // 4. Sign standard-compliant JWT token valid for 24 hours
     const now = Math.floor(Date.now() / 1000);

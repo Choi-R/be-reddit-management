@@ -142,31 +142,49 @@ admin.get('/users', async (c) => {
                  FROM user_tasks ut 
                  JOIN tasks t ON ut.task_id = t.id 
                  WHERE ut.user_id = u.id AND ut.status_id = 'success'), 
-                0.00
+                 0.00
               ) as pending_balance,
               COALESCE(
                 (SELECT SUM(t.price) 
                  FROM user_tasks ut 
                  JOIN tasks t ON ut.task_id = t.id 
                  WHERE ut.user_id = u.id AND ut.status_id = 'paid'), 
-                0.00
-              ) as paid_balance
+                 0.00
+              ) as paid_balance,
+              COALESCE(
+                (SELECT COUNT(*)::int 
+                 FROM user_tasks ut 
+                 WHERE ut.user_id = u.id AND ut.status_id IN ('success', 'paid')), 
+                 0
+              ) as completed_tasks_count
        FROM users u
        WHERE EXISTS (
-         SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id = 'basic'
+         SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id IN ('basic', 'bronze', 'silver', 'gold')
        )
        ORDER BY u.email ASC`
     );
 
-    const formattedUsers = usersList.rows.map((row: any) => ({
-      id: row.id,
-      email: row.email,
-      paypal: row.paypal,
-      reddit: row.reddit,
-      createdAt: row.created_at,
-      pendingBalance: parseFloat(row.pending_balance),
-      paidBalance: parseFloat(row.paid_balance)
-    }));
+    const formattedUsers = usersList.rows.map((row: any) => {
+      const completed = row.completed_tasks_count || 0;
+      let tier = 'Bronze';
+      if (completed >= 15) {
+        tier = 'Gold';
+      } else if (completed >= 5) {
+        tier = 'Silver';
+      }
+
+      return {
+        id: row.id,
+        email: row.email,
+        paypal: row.paypal,
+        reddit: row.reddit,
+        createdAt: row.created_at,
+        pendingBalance: parseFloat(row.pending_balance),
+        paidBalance: parseFloat(row.paid_balance),
+        completedCount: completed,
+        tier: tier
+      };
+    });
 
     return c.json({ users: formattedUsers });
   } catch (error: unknown) {

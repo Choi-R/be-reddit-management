@@ -115,11 +115,13 @@ CREATE INDEX idx_user_roles_user ON user_roles(user_id);
 -- 5. Seed Initial Lookup Tables & Default Admin User
 -- -------------------------------------------------------------
 
--- Seed: roles
 INSERT INTO roles (id, role_name) VALUES
 ('admin', 'Admin'),
 ('basic', 'Basic'),
-('choi', 'Choi');
+('choi', 'Choi'),
+('bronze', 'Bronze'),
+('silver', 'Silver'),
+('gold', 'Gold');
 
 -- Seed: task_types
 INSERT INTO task_types (id, type_name) VALUES

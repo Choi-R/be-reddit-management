@@ -82,14 +82,42 @@ tasks.post('/book', writeLimiter, async (c) => {
 
     // Run transaction to prevent race conditions (double bookings)
     const booking = await withTransaction(pool, async (client) => {
-      // A. Check if the user has active bookings (incomplete)
+      // A1. Get completed tasks count to determine tier and booking limit
+      const completedCheck = await client.query(
+        `SELECT COUNT(*)::int as count FROM user_tasks 
+         WHERE user_id = $1 AND status_id IN ('success', 'paid')`,
+        [user.id]
+      );
+      const completedCount = completedCheck.rows[0].count;
+
+      const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
+      let bookingLimit = 1;
+      let tierName = 'Bronze';
+
+      if (isAdmin) {
+        bookingLimit = 99;
+        tierName = 'Admin';
+      } else {
+        if (completedCount >= 15) {
+          bookingLimit = 3;
+          tierName = 'Gold';
+        } else if (completedCount >= 5) {
+          bookingLimit = 2;
+          tierName = 'Silver';
+        }
+      }
+
+      // A2. Check if the user has active bookings (incomplete)
       const activeCheck = await client.query(
         `SELECT COUNT(*)::int as count FROM user_tasks 
          WHERE user_id = $1 AND status_id = 'incomplete'`,
         [user.id]
       );
-      if (activeCheck.rows[0].count >= 2) {
-        throw new BusinessError('LIMIT_EXCEEDED', 'You can only book at most 2 tasks at a time.');
+      if (activeCheck.rows[0].count >= bookingLimit) {
+        throw new BusinessError(
+          'LIMIT_EXCEEDED',
+          `Your ${tierName} account (completed: ${completedCount}) can only book at most ${bookingLimit} task${bookingLimit === 1 ? '' : 's'} at a time.`
+        );
       }
 
       // B. Check if user already did this task previously
