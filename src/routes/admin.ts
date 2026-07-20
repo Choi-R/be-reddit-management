@@ -656,20 +656,48 @@ admin.post('/tasks/review', async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // Update status if it's currently pending
-    const result = await pool.query(
-      `UPDATE user_tasks 
-       SET status_id = $1, note = COALESCE($2, note), updated_at = NOW()
-       WHERE id = $3 AND status_id = 'pending'
-       RETURNING *`,
-      [statusId, note || null, bookingId]
-    );
+    const { updatedBooking, quotaReturned } = await withTransaction(pool, async (client) => {
+      // Lock and fetch pending user_tasks row
+      const bookingCheck = await client.query(
+        `SELECT task_id FROM user_tasks WHERE id = $1 AND status_id = 'pending' FOR UPDATE`,
+        [bookingId]
+      );
 
-    if (result.rows.length === 0) {
-      throw new BusinessError('NOT_FOUND', 'No pending task submission found matching this ID');
-    }
+      if (bookingCheck.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'No pending task submission found matching this ID');
+      }
 
-    return c.json({ success: true, booking: result.rows[0] });
+      const taskId = bookingCheck.rows[0].task_id;
+
+      // Update status if it's currently pending
+      const updateResult = await client.query(
+        `UPDATE user_tasks 
+         SET status_id = $1, note = COALESCE($2, note), updated_at = NOW()
+         WHERE id = $3 AND status_id = 'pending'
+         RETURNING *`,
+        [statusId, note || null, bookingId]
+      );
+
+      let returnedQuota = false;
+      if (statusId === 'failed') {
+        // Increment task quota by 1 if within deadline (deadline is NULL or in the future)
+        const updateQuotaResult = await client.query(
+          `UPDATE tasks 
+           SET quota = quota + 1, updated_at = NOW() 
+           WHERE id = $1 AND (deadline IS NULL OR deadline > NOW())
+           RETURNING id`,
+          [taskId]
+        );
+        returnedQuota = updateQuotaResult.rows.length > 0;
+      }
+
+      return {
+        updatedBooking: updateResult.rows[0],
+        quotaReturned: returnedQuota
+      };
+    });
+
+    return c.json({ success: true, booking: updatedBooking, quotaReturned });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin review submission error');
     return c.json(body, status);

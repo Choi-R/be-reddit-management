@@ -281,6 +281,60 @@ async function runTests() {
     console.log(`✅ Task reply submitted successfully. Status updated to: ${submitRes.data.booking.status_id}\n`);
 
     // -------------------------------------------------------------
+    // Step 8.5: Test Admin Rejects Submission (Deem Failed) & Quota Return Flow
+    // -------------------------------------------------------------
+    console.log('Step 8.5: Testing Admin review (deem failed) & quota return...');
+    const failTestTaskRes = await apiRequest('/api/admin/tasks', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        url: `https://reddit.com/r/test/comments/test_${Date.now()}`,
+        clientRequest: 'Test fail review quota return',
+        quota: 1,
+        price: 5.0,
+        typeId: 1,
+      }),
+    });
+    const failTaskId = failTestTaskRes.data.task.id;
+
+    const failBookRes = await apiRequest('/api/tasks/book', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${basicToken}` },
+      body: JSON.stringify({ taskId: failTaskId }),
+    });
+    const failBookingId = failBookRes.data.booking.id;
+
+    await apiRequest('/api/tasks/submit', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${basicToken}` },
+      body: JSON.stringify({
+        taskId: failTaskId,
+        replyUrl: `https://reddit.com/r/test/comments/reply_${Date.now()}`,
+      }),
+    });
+
+    const failReviewRes = await apiRequest('/api/admin/tasks/review', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({
+        bookingId: failBookingId,
+        statusId: 'failed',
+        note: 'Invalid reply link',
+      }),
+    });
+
+    if (failReviewRes.status !== 200 || !failReviewRes.data.quotaReturned) {
+      throw new Error(`Failed review test failed: ${JSON.stringify(failReviewRes.data)}`);
+    }
+    console.log('✅ Submission marked as failed and task quota returned successfully.\n');
+
+    // Delete temporary task
+    await apiRequest(`/api/admin/tasks/${failTaskId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+
+    // -------------------------------------------------------------
     // Step 9: Admin Reviews Task (Approve)
     // -------------------------------------------------------------
     console.log('Step 9: Admin reviewing and approving submission...');
