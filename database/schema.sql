@@ -34,6 +34,7 @@ CREATE TABLE users (
     password TEXT NOT NULL, -- Format: salt:sha256_hash
     paypal TEXT,
     reddit TEXT NOT NULL,
+    nickname TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );

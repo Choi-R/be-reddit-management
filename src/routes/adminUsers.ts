@@ -16,7 +16,7 @@ adminUsers.post('/users', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email, password, and reddit username are required');
     }
 
-    const { email, password, paypal, reddit } = body;
+    const { email, password, paypal, reddit, nickname } = body;
 
     // Validate inputs
     validateEmail(email);
@@ -28,6 +28,9 @@ adminUsers.post('/users', async (c) => {
       validateEmail(paypal);
     }
     validateStringField(reddit, 'Reddit username', 500);
+    if (nickname) {
+      validateStringField(nickname, 'Nickname', 255);
+    }
 
     const cleanReddit = extractRedditUsername(reddit);
     if (cleanReddit.length === 0 || cleanReddit.length > 100) {
@@ -46,10 +49,10 @@ adminUsers.post('/users', async (c) => {
 
     const newUser = await withTransaction(pool, async (client) => {
       const userInsert = await client.query(
-        `INSERT INTO users (email, password, paypal, reddit, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, NOW(), NOW())
-         RETURNING id, email, paypal, reddit, created_at`,
-        [email, securePassword, paypal || null, cleanReddit]
+        `INSERT INTO users (email, password, paypal, reddit, nickname, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+         RETURNING id, email, paypal, reddit, nickname, created_at`,
+        [email, securePassword, paypal || null, cleanReddit, nickname || null]
       );
 
       const createdUser = userInsert.rows[0];
@@ -82,7 +85,7 @@ adminUsers.get('/users', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const usersList = await pool.query(
-      `SELECT u.id, u.email, u.paypal, u.reddit, u.created_at,
+      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.created_at,
               COALESCE(
                 (SELECT SUM(t.price) 
                  FROM user_tasks ut 
@@ -142,6 +145,7 @@ adminUsers.get('/users', async (c) => {
         email: row.email,
         paypal: row.paypal,
         reddit: row.reddit,
+        nickname: row.nickname,
         createdAt: row.created_at,
         pendingBalance: parseFloat(row.pending_balance),
         paidBalance: parseFloat(row.paid_balance),
@@ -167,7 +171,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const userRes = await pool.query(
-      `SELECT id, email, paypal, reddit, created_at FROM users WHERE id = $1`,
+      `SELECT id, email, paypal, reddit, nickname, created_at FROM users WHERE id = $1`,
       [id]
     );
     if (userRes.rows.length === 0) {
@@ -263,6 +267,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
           email: user.email,
           paypal: user.paypal,
           reddit: user.reddit,
+          nickname: user.nickname,
           createdAt: user.created_at,
           tier,
           bookingLimit,
@@ -299,13 +304,16 @@ adminUsers.put('/users/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email and Reddit username/link are required');
     }
 
-    const { email, paypal, reddit } = body;
+    const { email, paypal, reddit, nickname } = body;
 
     validateEmail(email);
     if (paypal) {
       validateEmail(paypal);
     }
     validateStringField(reddit, 'Reddit username', 500);
+    if (nickname) {
+      validateStringField(nickname, 'Nickname', 255);
+    }
 
     const cleanReddit = extractRedditUsername(reddit);
     if (cleanReddit.length === 0 || cleanReddit.length > 100) {
@@ -325,10 +333,10 @@ adminUsers.put('/users/:id', async (c) => {
     }
 
     const query = `UPDATE users 
-             SET email = $1, paypal = $2, reddit = $3, updated_at = NOW() 
-             WHERE id = $4 
-             RETURNING id, email, paypal, reddit, created_at`;
-    const params = [email, paypal || null, cleanReddit, id];
+             SET email = $1, paypal = $2, reddit = $3, nickname = $4, updated_at = NOW() 
+             WHERE id = $5 
+             RETURNING id, email, paypal, reddit, nickname, created_at`;
+    const params = [email, paypal || null, cleanReddit, nickname || null, id];
 
     const result = await pool.query(query, params);
     return c.json({ success: true, user: result.rows[0] });
