@@ -20,6 +20,7 @@ async function resolveUserId(pool: any, identifier: string | null | undefined): 
      WHERE email = $1 
         OR reddit = $1 
         OR reddit = $2
+        OR nickname = $1
         OR id::text = $1 
      LIMIT 1`,
     [cleanVal, strippedReddit]

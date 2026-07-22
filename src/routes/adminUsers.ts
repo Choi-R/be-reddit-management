@@ -164,6 +164,60 @@ adminUsers.get('/users', async (c) => {
   }
 });
 
+// 2b. Search users by email, reddit username, or nickname (regex support, min 3 chars, max 5 results)
+adminUsers.get('/users/search', async (c) => {
+  try {
+    const q = (c.req.query('q') || '').trim();
+    if (q.length < 3) {
+      return c.json({ users: [] });
+    }
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    let isRegexValid = true;
+    try {
+      new RegExp(q);
+    } catch {
+      isRegexValid = false;
+    }
+
+    let queryText = `
+      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.created_at
+      FROM users u
+      WHERE EXISTS (
+        SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id IN ('basic', 'bronze', 'silver', 'gold')
+      )
+    `;
+
+    let queryParams: any[] = [];
+    if (isRegexValid) {
+      queryText += ` AND (u.email ~* $1 OR u.reddit ~* $1 OR u.nickname ~* $1)`;
+      queryParams.push(q);
+    } else {
+      queryText += ` AND (u.email ILIKE $1 OR u.reddit ILIKE $1 OR u.nickname ILIKE $1)`;
+      queryParams.push(`%${q}%`);
+    }
+
+    queryText += ` ORDER BY u.email ASC LIMIT 5`;
+
+    const usersList = await pool.query(queryText, queryParams);
+
+    const formattedUsers = usersList.rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      paypal: row.paypal,
+      reddit: row.reddit,
+      nickname: row.nickname,
+      createdAt: row.created_at,
+    }));
+
+    return c.json({ users: formattedUsers });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin search users error');
+    return c.json(body, status);
+  }
+});
+
 // 3. Fetch detailed user statistics, active bookings, pending submissions, and activity history
 adminUsers.get('/users/:id/detail', async (c) => {
   try {
