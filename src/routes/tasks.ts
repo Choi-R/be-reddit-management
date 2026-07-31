@@ -29,14 +29,14 @@ tasks.get('/available', async (c) => {
     // - Task is either unassigned or assigned explicitly to the current user
     // - User has no booking history for this task
     const availableTasks = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, t.price, t.deadline, tt.type_name
+      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota, t.price, t.deadline, tt.type_name
        FROM tasks t
        JOIN task_types tt ON t.type_id = tt.id
        WHERE t.quota > 0
          AND (t.deadline IS NULL OR t.deadline > NOW())
          AND (t.assigned_to IS NULL OR t.assigned_to = $1)
          AND t.deleted_at IS NULL
-         AND (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') < (3 * COALESCE(t.original_quota, t.quota))
+         AND (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') < (3 * COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1))
          AND NOT EXISTS (
            SELECT 1 FROM user_tasks ut 
            WHERE ut.task_id = t.id AND ut.user_id = $1
@@ -133,7 +133,7 @@ tasks.post('/book', writeLimiter, async (c) => {
 
       // C. Lock task row to check and decrement quota safely
       const taskCheck = await client.query(
-        `SELECT quota, COALESCE(original_quota, quota) as original_quota, deadline, assigned_to, deleted_at,
+        `SELECT quota, COALESCE(NULLIF(original_quota, 0), NULLIF(quota, 0), 1) as original_quota, deadline, assigned_to, deleted_at,
                 (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = tasks.id AND ut.status_id = 'failed') as count_failed
          FROM tasks WHERE id = $1 FOR UPDATE`,
         [taskId]
@@ -154,7 +154,8 @@ tasks.post('/book', writeLimiter, async (c) => {
       if (task.deadline && new Date(task.deadline) <= new Date()) {
         throw new BusinessError('EXPIRED', 'Task deadline has passed.');
       }
-      const maxFailThreshold = 3 * (task.original_quota || task.quota || 1);
+      const origQuota = (typeof task.original_quota === 'number' && task.original_quota > 0) ? task.original_quota : ((typeof task.quota === 'number' && task.quota > 0) ? task.quota : 1);
+      const maxFailThreshold = 3 * origQuota;
       if ((task.count_failed || 0) >= maxFailThreshold) {
         throw new BusinessError('EXPIRED', 'This task has been archived due to excessive failed attempts.');
       }

@@ -209,8 +209,12 @@ adminTasks.get('/tasks', async (c) => {
   try {
     const pool = getDbPool(c.env.DATABASE_URL);
 
+    await pool.query(
+      `UPDATE tasks SET original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), NULLIF(quota, 0), 1), 1) WHERE original_quota IS NULL OR original_quota < 1`
+    ).catch(() => {});
+
     const tasksList = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(t.original_quota, t.quota) as original_quota,
+      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.type_id, tt.type_name, t.deleted_at, t.created_at, t.updated_at,
               u.email as assigned_to_email,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
@@ -229,35 +233,41 @@ adminTasks.get('/tasks', async (c) => {
     const now = new Date();
 
     for (const task of tasksList.rows) {
-      const origQuota = task.original_quota ?? task.quota ?? 1;
+      const origQuota = (typeof task.original_quota === 'number' && task.original_quota > 0)
+        ? task.original_quota
+        : ((typeof task.quota === 'number' && task.quota > 0) ? task.quota : 1);
       const isDeleted = task.deleted_at !== null && task.deleted_at !== undefined;
       const isDeadlineUp = task.deadline ? new Date(task.deadline) <= now : false;
-      const isQuotaZero = task.quota === 0;
+      const countActive = (task.count_incomplete || 0) + (task.count_pending || 0);
+      const countDone = (task.count_success || 0) + (task.count_paid || 0);
+      const isQuotaDepleted = task.quota === 0 && countActive === 0;
       const maxFailThreshold = 3 * origQuota;
       const isFailedMax = (task.count_failed || 0) >= maxFailThreshold;
 
-      const isArchived = isDeleted || isDeadlineUp || isQuotaZero || isFailedMax;
+      const isArchived = isDeleted || isDeadlineUp || isQuotaDepleted || isFailedMax;
 
       if (isArchived) {
         let reason = '';
         if (isDeleted) {
           reason = 'Deleted by Admin';
-        } else if (isQuotaZero) {
-          reason = 'Quota Depleted (0 Quota Remaining)';
         } else if (isDeadlineUp) {
           reason = 'Deadline Passed';
         } else if (isFailedMax) {
           reason = `Excessive Failures (${task.count_failed}/${maxFailThreshold} Max Failures)`;
+        } else if (isQuotaDepleted) {
+          reason = `Quota Depleted (${countDone}/${origQuota} Completed)`;
         }
 
         archivedTasks.push({
           ...task,
+          original_quota: origQuota,
           is_archived: true,
           archive_reason: reason,
         });
       } else {
         activeTasks.push({
           ...task,
+          original_quota: origQuota,
           is_archived: false,
         });
       }
@@ -317,12 +327,12 @@ adminTasks.put('/tasks/:id', async (c) => {
       throw new BusinessError('INVALID_INPUT', 'Invalid task type ID');
     }
 
-    const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : quota;
+    const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : (quota > 0 ? quota : 1);
     const restoreSql = restore ? `, deleted_at = NULL` : '';
 
     const result = await pool.query(
       `UPDATE tasks 
-       SET subreddit = $1, url = $2, client_request = $3, quota = $4, original_quota = GREATEST(COALESCE(original_quota, $4), $5),
+       SET subreddit = $1, url = $2, client_request = $3, quota = $4, original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), $4, 1), $5),
            assigned_to = $6, price = $7, deadline = $8, type_id = $9, updated_at = NOW() ${restoreSql}
        WHERE id = $10 
        RETURNING *`,
@@ -351,6 +361,7 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
       `UPDATE tasks 
        SET deleted_at = NULL, 
            quota = CASE WHEN quota = 0 THEN 1 ELSE quota END,
+           original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), quota, 1), 1),
            updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
