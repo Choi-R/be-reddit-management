@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS password_resets (
 
 CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
 CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at);
+
+ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS admin_note TEXT;
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_quota INTEGER;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+UPDATE tasks SET original_quota = quota WHERE original_quota IS NULL;
 `;
 
 async function run() {

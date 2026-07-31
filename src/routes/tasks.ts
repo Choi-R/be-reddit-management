@@ -35,6 +35,8 @@ tasks.get('/available', async (c) => {
        WHERE t.quota > 0
          AND (t.deadline IS NULL OR t.deadline > NOW())
          AND (t.assigned_to IS NULL OR t.assigned_to = $1)
+         AND t.deleted_at IS NULL
+         AND (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') < (3 * COALESCE(t.original_quota, t.quota))
          AND NOT EXISTS (
            SELECT 1 FROM user_tasks ut 
            WHERE ut.task_id = t.id AND ut.user_id = $1
@@ -131,7 +133,9 @@ tasks.post('/book', writeLimiter, async (c) => {
 
       // C. Lock task row to check and decrement quota safely
       const taskCheck = await client.query(
-        `SELECT quota, deadline, assigned_to FROM tasks WHERE id = $1 FOR UPDATE`,
+        `SELECT quota, COALESCE(original_quota, quota) as original_quota, deadline, assigned_to, deleted_at,
+                (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = tasks.id AND ut.status_id = 'failed') as count_failed
+         FROM tasks WHERE id = $1 FOR UPDATE`,
         [taskId]
       );
       if (taskCheck.rows.length === 0) {
@@ -141,11 +145,18 @@ tasks.post('/book', writeLimiter, async (c) => {
       const task = taskCheck.rows[0];
 
       // D. Verify task properties
+      if (task.deleted_at) {
+        throw new BusinessError('EXPIRED', 'This task has been archived.');
+      }
       if (task.quota <= 0) {
         throw new BusinessError('NO_QUOTA', 'Task is no longer available.');
       }
       if (task.deadline && new Date(task.deadline) <= new Date()) {
         throw new BusinessError('EXPIRED', 'Task deadline has passed.');
+      }
+      const maxFailThreshold = 3 * (task.original_quota || task.quota || 1);
+      if ((task.count_failed || 0) >= maxFailThreshold) {
+        throw new BusinessError('EXPIRED', 'This task has been archived due to excessive failed attempts.');
       }
       if (task.assigned_to && task.assigned_to !== user.id) {
         throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
@@ -333,7 +344,7 @@ tasks.get('/earnings', async (c) => {
 
     // A. Fetch task list with payouts
     const history = await pool.query(
-      `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.created_at, ut.updated_at,
+      `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
               t.id as task_id, t.subreddit, t.price, tt.type_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id

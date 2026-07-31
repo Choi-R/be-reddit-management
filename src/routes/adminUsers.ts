@@ -302,7 +302,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
     );
 
     const taskHistoryRes = await pool.query(
-      `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.created_at, ut.updated_at,
+      `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
               t.subreddit, t.url, t.client_request, t.price, t.deadline, tt.type_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id

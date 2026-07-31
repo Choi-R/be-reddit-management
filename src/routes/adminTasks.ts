@@ -80,8 +80,8 @@ adminTasks.post('/tasks', async (c) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO tasks (subreddit, url, client_request, quota, assigned_to, price, deadline, type_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+      `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, NOW(), NOW())
        RETURNING *`,
       [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, typeId]
     );
@@ -187,8 +187,8 @@ adminTasks.post('/tasks/bulk', async (c) => {
       const results = [];
       for (const t of validatedTasks) {
         const res = await client.query(
-          `INSERT INTO tasks (subreddit, url, client_request, quota, assigned_to, price, deadline, type_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, NOW(), NOW())
+          `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $4, NULL, $5, $6, $7, NOW(), NOW())
            RETURNING *`,
           [t.subreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.typeId]
         );
@@ -204,13 +204,14 @@ adminTasks.post('/tasks/bulk', async (c) => {
   }
 });
 
-// 3. Retrieve all Tasks with status metrics
+// 3. Retrieve all Tasks partitioned into Active and Archived
 adminTasks.get('/tasks', async (c) => {
   try {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const tasksList = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, t.price, t.deadline, t.type_id, tt.type_name,
+      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(t.original_quota, t.quota) as original_quota,
+              t.price, t.deadline, t.type_id, tt.type_name, t.deleted_at, t.created_at, t.updated_at,
               u.email as assigned_to_email,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'pending') as count_pending,
@@ -223,7 +224,46 @@ adminTasks.get('/tasks', async (c) => {
        ORDER BY t.created_at DESC`
     );
 
-    return c.json({ tasks: tasksList.rows });
+    const activeTasks: any[] = [];
+    const archivedTasks: any[] = [];
+    const now = new Date();
+
+    for (const task of tasksList.rows) {
+      const origQuota = task.original_quota ?? task.quota ?? 1;
+      const isDeleted = task.deleted_at !== null && task.deleted_at !== undefined;
+      const isDeadlineUp = task.deadline ? new Date(task.deadline) <= now : false;
+      const isQuotaZero = task.quota === 0;
+      const maxFailThreshold = 3 * origQuota;
+      const isFailedMax = (task.count_failed || 0) >= maxFailThreshold;
+
+      const isArchived = isDeleted || isDeadlineUp || isQuotaZero || isFailedMax;
+
+      if (isArchived) {
+        let reason = '';
+        if (isDeleted) {
+          reason = 'Deleted by Admin';
+        } else if (isQuotaZero) {
+          reason = 'Quota Depleted (0 Quota Remaining)';
+        } else if (isDeadlineUp) {
+          reason = 'Deadline Passed';
+        } else if (isFailedMax) {
+          reason = `Excessive Failures (${task.count_failed}/${maxFailThreshold} Max Failures)`;
+        }
+
+        archivedTasks.push({
+          ...task,
+          is_archived: true,
+          archive_reason: reason,
+        });
+      } else {
+        activeTasks.push({
+          ...task,
+          is_archived: false,
+        });
+      }
+    }
+
+    return c.json({ tasks: activeTasks, archivedTasks, allTasks: tasksList.rows });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin fetch tasks error');
     return c.json(body, status);
@@ -239,7 +279,7 @@ adminTasks.put('/tasks/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, price, and typeId are required');
     }
 
-    const { url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    const { url, clientRequest, quota, originalQuota, assignedTo, price, deadline, typeId, restore } = body;
     let subreddit = body.subreddit || null;
 
     if (url) {
@@ -256,8 +296,8 @@ adminTasks.put('/tasks/:id', async (c) => {
     validateStringField(clientRequest, 'Client request', 5000);
     validateStringField(typeId, 'Type ID', 50);
 
-    if (typeof quota !== 'number' || !Number.isInteger(quota) || quota < 1) {
-      throw new BusinessError('INVALID_INPUT', 'Quota must be a positive integer');
+    if (typeof quota !== 'number' || !Number.isInteger(quota) || quota < 0) {
+      throw new BusinessError('INVALID_INPUT', 'Quota must be a non-negative integer');
     }
     if (typeof price !== 'number' || price <= 0) {
       throw new BusinessError('INVALID_INPUT', 'Price must be a positive number');
@@ -277,12 +317,16 @@ adminTasks.put('/tasks/:id', async (c) => {
       throw new BusinessError('INVALID_INPUT', 'Invalid task type ID');
     }
 
+    const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : quota;
+    const restoreSql = restore ? `, deleted_at = NULL` : '';
+
     const result = await pool.query(
       `UPDATE tasks 
-       SET subreddit = $1, url = $2, client_request = $3, quota = $4, assigned_to = $5, price = $6, deadline = $7, type_id = $8, updated_at = NOW()
-       WHERE id = $9 
+       SET subreddit = $1, url = $2, client_request = $3, quota = $4, original_quota = GREATEST(COALESCE(original_quota, $4), $5),
+           assigned_to = $6, price = $7, deadline = $8, type_id = $9, updated_at = NOW() ${restoreSql}
+       WHERE id = $10 
        RETURNING *`,
-      [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, typeId, id]
+      [subreddit || null, url, clientRequest, quota, finalOriginalQuota, resolvedAssignedTo, price, deadline || null, typeId, id]
     );
 
     if (result.rows.length === 0) {
@@ -296,19 +340,55 @@ adminTasks.put('/tasks/:id', async (c) => {
   }
 });
 
-// 5. Delete a Task configuration
-adminTasks.delete('/tasks/:id', async (c) => {
+// 5. Restore / Un-archive a Task
+adminTasks.post('/tasks/:id/restore', async (c) => {
   try {
     const id = c.req.param('id');
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    const result = await pool.query(`DELETE FROM tasks WHERE id = $1 RETURNING id`, [id]);
+    // If restoring, set deleted_at to NULL. Also if quota is 0, give it at least 1 quota
+    const result = await pool.query(
+      `UPDATE tasks 
+       SET deleted_at = NULL, 
+           quota = CASE WHEN quota = 0 THEN 1 ELSE quota END,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
 
     if (result.rows.length === 0) {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
 
-    return c.json({ success: true, message: 'Task deleted successfully' });
+    return c.json({ success: true, message: 'Task restored successfully', task: result.rows[0] });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin restore task error');
+    return c.json(body, status);
+  }
+});
+
+// 6. Delete a Task configuration (Soft Delete by default, Permanent Delete if specified or already soft-deleted)
+adminTasks.delete('/tasks/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const permanent = c.req.query('permanent') === 'true';
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const taskCheck = await pool.query('SELECT deleted_at FROM tasks WHERE id = $1', [id]);
+    if (taskCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'Task not found');
+    }
+
+    const isAlreadySoftDeleted = taskCheck.rows[0].deleted_at !== null;
+
+    if (permanent || isAlreadySoftDeleted) {
+      await pool.query(`DELETE FROM tasks WHERE id = $1`, [id]);
+      return c.json({ success: true, message: 'Task permanently deleted successfully' });
+    } else {
+      await pool.query(`UPDATE tasks SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, [id]);
+      return c.json({ success: true, message: 'Task moved to Archived tasks successfully' });
+    }
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin delete task error');
     return c.json(body, status);

@@ -72,10 +72,12 @@ CREATE TABLE tasks (
     url TEXT NOT NULL,
     client_request TEXT NOT NULL,
     quota INTEGER CHECK (quota >= 0) NOT NULL,
+    original_quota INTEGER CHECK (original_quota >= 0),
     assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
     price DECIMAL(10, 2) NOT NULL,
     deadline TIMESTAMPTZ,
     type_id TEXT REFERENCES task_types(id) NOT NULL,
+    deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
@@ -88,6 +90,7 @@ CREATE TABLE user_tasks (
     status_id TEXT REFERENCES task_status(id) DEFAULT 'incomplete' NOT NULL,
     reply_url TEXT,
     note TEXT,
+    admin_note TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     UNIQUE(user_id, task_id) -- User cannot perform the same task more than once

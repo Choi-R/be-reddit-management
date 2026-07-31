@@ -13,12 +13,13 @@ adminReviews.post('/tasks/review', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Booking ID (bookingId) and Status (statusId: success/failed) are required');
     }
 
-    const { bookingId, statusId, note } = body;
+    const { bookingId, statusId, note, adminNote } = body;
+    const effectiveAdminNote = adminNote !== undefined ? adminNote : note;
     if (statusId !== 'success' && statusId !== 'failed') {
       throw new BusinessError('INVALID_INPUT', 'Status must be either "success" or "failed"');
     }
 
-    if (note && (typeof note !== 'string' || note.length > 5000)) {
+    if (effectiveAdminNote && (typeof effectiveAdminNote !== 'string' || effectiveAdminNote.length > 5000)) {
       throw new BusinessError('INVALID_INPUT', 'Note is too long (max 5000 characters)');
     }
 
@@ -38,10 +39,10 @@ adminReviews.post('/tasks/review', async (c) => {
 
       const updateResult = await client.query(
         `UPDATE user_tasks 
-         SET status_id = $1, note = COALESCE($2, note), updated_at = NOW()
+         SET status_id = $1, admin_note = $2, updated_at = NOW()
          WHERE id = $3 AND status_id = 'pending'
          RETURNING *`,
-        [statusId, note || null, bookingId]
+        [statusId, effectiveAdminNote || null, bookingId]
       );
 
       let returnedQuota = false;
