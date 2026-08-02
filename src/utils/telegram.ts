@@ -3,16 +3,20 @@ import { Env } from '../types';
 /**
  * Sends a notification message to a Telegram group using the Telegram Bot API.
  */
-export async function sendTelegramNotification(env: Env, text: string): Promise<boolean> {
+export async function sendTelegramNotification(
+  env: Env,
+  text: string
+): Promise<{ success: boolean; reason: string }> {
   const token = env.TELEGRAM_BOT_TOKEN || env.VITE_TELEGRAM_BOT_TOKEN;
   const chatId = env.TELEGRAM_CHAT_ID || env.VITE_TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
-    console.warn('⚠️ [Telegram Bot Dev Mode]: Credentials missing (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID). Payload:');
-    console.log('--------------------------------------------------');
-    console.log(text);
-    console.log('--------------------------------------------------');
-    return false;
+    const missing: string[] = [];
+    if (!token) missing.push('TELEGRAM_BOT_TOKEN');
+    if (!chatId) missing.push('TELEGRAM_CHAT_ID');
+    const reason = `Telegram credentials missing in Cloudflare environment secrets: ${missing.join(', ')}`;
+    console.warn(`⚠️ [Telegram Bot Dev Mode]: ${reason}`);
+    return { success: false, reason };
   }
 
   try {
@@ -30,15 +34,17 @@ export async function sendTelegramNotification(env: Env, text: string): Promise<
 
     if (!response.ok) {
       const errBody = await response.text();
-      console.error('❌ [Telegram Bot Error]: Failed to send message.', response.status, errBody);
-      return false;
+      const reason = `Telegram API Error (HTTP ${response.status}): ${errBody}`;
+      console.error('❌ [Telegram Bot Error]:', reason);
+      return { success: false, reason };
     }
 
     console.log('✅ [Telegram Bot]: Notification sent successfully.');
-    return true;
-  } catch (error) {
-    console.error('❌ [Telegram Bot Error]: Exception during fetch call.', error);
-    return false;
+    return { success: true, reason: 'Notification sent successfully to Telegram group.' };
+  } catch (error: any) {
+    const reason = `Fetch exception: ${error?.message || String(error)}`;
+    console.error('❌ [Telegram Bot Error]:', reason);
+    return { success: false, reason };
   }
 }
 
@@ -50,9 +56,9 @@ export async function checkAndNotifyTelegramTaskCreated(
   pool: any,
   env: Env,
   taskCount: number = 1
-): Promise<void> {
+): Promise<{ notified: boolean; reason: string }> {
   try {
-    // Get the timestamp of the latest task currently in the DB (before or after insert)
+    // Query the timestamp of the latest task currently in the DB before inserting new task
     const latestTaskRes = await pool.query(
       `SELECT created_at FROM tasks ORDER BY created_at DESC LIMIT 1`
     );
@@ -78,11 +84,16 @@ export async function checkAndNotifyTelegramTaskCreated(
       const taskText = taskCount > 1 ? `${taskCount} new tasks have` : 'A new task has';
       const message = `📢 <b>New Task Available!</b>\n\n${taskText} been added to the platform!\n\n👉 <a href="${frontendUrl}">Log in to claim tasks</a>`;
 
-      await sendTelegramNotification(env, message);
+      const sendResult = await sendTelegramNotification(env, message);
+      return { notified: sendResult.success, reason: sendResult.reason };
     } else {
-      console.log(`ℹ️ [Telegram Bot]: Cooldown active (last task created ${hoursSinceLast.toFixed(2)}h ago < 12h). Notification skipped.`);
+      const reason = `Cooldown active: The most recent existing task was created ${hoursSinceLast.toFixed(2)} hours ago (less than 12-hour required cooldown).`;
+      console.log(`ℹ️ [Telegram Bot]: ${reason}`);
+      return { notified: false, reason };
     }
-  } catch (err) {
-    console.error('❌ [Telegram Bot Error]: Failed during cooldown check or notification dispatch:', err);
+  } catch (err: any) {
+    const reason = `Cooldown check error: ${err?.message || String(err)}`;
+    console.error('❌ [Telegram Bot Error]:', reason);
+    return { notified: false, reason };
   }
 }

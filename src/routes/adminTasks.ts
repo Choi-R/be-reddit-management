@@ -3,7 +3,7 @@ import { getDbPool, withTransaction } from '../db/connection';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
 import { validateStringField, extractRedditUsername } from '../utils/validation';
-import { checkAndNotifyTelegramTaskCreated } from '../utils/telegram';
+import { checkAndNotifyTelegramTaskCreated, sendTelegramNotification } from '../utils/telegram';
 
 const adminTasks = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -81,7 +81,7 @@ adminTasks.post('/tasks', async (c) => {
     }
 
     // Check Telegram notification cooldown (12h since latest task) BEFORE inserting new task
-    await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
+    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
     const result = await pool.query(
       `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
@@ -90,7 +90,12 @@ adminTasks.post('/tasks', async (c) => {
       [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, typeId]
     );
 
-    return c.json({ success: true, task: result.rows[0] });
+    return c.json({
+      success: true,
+      task: result.rows[0],
+      telegramNotified: telegramResult.notified,
+      telegramReason: telegramResult.reason
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin create task error');
     return c.json(body, status);
@@ -188,7 +193,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
     }
 
     // Check Telegram notification cooldown (12h since latest task) BEFORE bulk inserting new tasks
-    await checkAndNotifyTelegramTaskCreated(pool, c.env, validatedTasks.length);
+    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, validatedTasks.length);
 
     const insertedTasks = await withTransaction(pool, async (client) => {
       const results = [];
@@ -204,9 +209,29 @@ adminTasks.post('/tasks/bulk', async (c) => {
       return results;
     });
 
-    return c.json({ success: true, count: insertedTasks.length, tasks: insertedTasks });
+    return c.json({
+      success: true,
+      count: insertedTasks.length,
+      tasks: insertedTasks,
+      telegramNotified: telegramResult.notified,
+      telegramReason: telegramResult.reason
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin bulk create tasks error');
+    return c.json(body, status);
+  }
+});
+
+// Test Telegram Bot integration endpoint (bypasses 12h cooldown)
+adminTasks.post('/tasks/test-telegram', async (c) => {
+  try {
+    const res = await sendTelegramNotification(
+      c.env,
+      '🧪 <b>Test Notification</b>\n\nTelegram Bot is successfully connected to your Reddit Management CRM!'
+    );
+    return c.json({ success: res.success, reason: res.reason });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Test telegram error');
     return c.json(body, status);
   }
 });
