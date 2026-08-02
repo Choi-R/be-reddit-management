@@ -16,6 +16,10 @@ export interface Env {
   VITE_SMTP_FROM?: string;
   RESEND_API_KEY?: string;
   VITE_RESEND_API_KEY?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  VITE_TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_CHAT_ID?: string;
+  VITE_TELEGRAM_CHAT_ID?: string;
 }
 
 export interface UserPayload {

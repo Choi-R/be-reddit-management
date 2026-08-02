@@ -3,6 +3,7 @@ import { getDbPool, withTransaction } from '../db/connection';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
 import { validateStringField, extractRedditUsername } from '../utils/validation';
+import { checkAndNotifyTelegramTaskCreated } from '../utils/telegram';
 
 const adminTasks = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -78,6 +79,9 @@ adminTasks.post('/tasks', async (c) => {
     if (typeCheck.rows.length === 0) {
       throw new BusinessError('INVALID_INPUT', 'Invalid task type ID');
     }
+
+    // Check Telegram notification cooldown (12h since latest task) BEFORE inserting new task
+    await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
     const result = await pool.query(
       `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
@@ -182,6 +186,9 @@ adminTasks.post('/tasks/bulk', async (c) => {
         typeId: 'normal',
       });
     }
+
+    // Check Telegram notification cooldown (12h since latest task) BEFORE bulk inserting new tasks
+    await checkAndNotifyTelegramTaskCreated(pool, c.env, validatedTasks.length);
 
     const insertedTasks = await withTransaction(pool, async (client) => {
       const results = [];
