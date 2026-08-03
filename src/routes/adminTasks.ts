@@ -426,6 +426,19 @@ adminTasks.delete('/tasks/:id', async (c) => {
     const isAlreadySoftDeleted = taskCheck.rows[0].deleted_at !== null;
 
     if (permanent || isAlreadySoftDeleted) {
+      const userTasksCheck = await pool.query(
+        'SELECT COUNT(*)::int as count FROM user_tasks WHERE task_id = $1',
+        [id]
+      );
+      const userTasksCount = userTasksCheck.rows[0].count;
+
+      if (userTasksCount > 0) {
+        throw new BusinessError(
+          'CANNOT_DELETE',
+          `Cannot permanently delete task because ${userTasksCount} user booking(s)/submission(s) exist for it. The task will remain in Archived Tasks to preserve user records and earnings.`
+        );
+      }
+
       await pool.query(`DELETE FROM tasks WHERE id = $1`, [id]);
       return c.json({ success: true, message: 'Task permanently deleted successfully' });
     } else {
