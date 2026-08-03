@@ -5,10 +5,11 @@ import { Env } from '../types';
  */
 export async function sendTelegramNotification(
   env: Env,
-  text: string
+  text: string,
+  targetChatId?: string | number
 ): Promise<{ success: boolean; reason: string }> {
   const token = env.TELEGRAM_BOT_TOKEN || env.VITE_TELEGRAM_BOT_TOKEN;
-  const chatId = env.TELEGRAM_CHAT_ID || env.VITE_TELEGRAM_CHAT_ID;
+  const chatId = targetChatId || env.TELEGRAM_CHAT_ID || env.VITE_TELEGRAM_CHAT_ID;
 
   if (!token || !chatId) {
     const missing: string[] = [];
@@ -33,9 +34,22 @@ export async function sendTelegramNotification(
     });
 
     if (!response.ok) {
-      const errBody = await response.text();
-      const reason = `Telegram API Error (HTTP ${response.status}): ${errBody}`;
-      console.error('❌ [Telegram Bot Error]:', reason);
+      const errText = await response.text();
+      let migrateChatId: number | string | null = null;
+      try {
+        const errJson = JSON.parse(errText);
+        if (errJson?.parameters?.migrate_to_chat_id) {
+          migrateChatId = errJson.parameters.migrate_to_chat_id;
+        }
+      } catch {}
+
+      if (migrateChatId && String(migrateChatId) !== String(chatId)) {
+        console.warn(`[Telegram Bot]: Group upgraded to supergroup. Retrying with migrated chat_id: ${migrateChatId}`);
+        return await sendTelegramNotification(env, text, migrateChatId);
+      }
+
+      const reason = `Telegram API Error (HTTP ${response.status}): ${errText}`;
+      console.error('[Telegram Bot Error]:', reason);
       return { success: false, reason };
     }
 
