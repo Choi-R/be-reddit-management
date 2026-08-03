@@ -16,7 +16,7 @@ export async function sendTelegramNotification(
     if (!token) missing.push('TELEGRAM_BOT_TOKEN');
     if (!chatId) missing.push('TELEGRAM_CHAT_ID');
     const reason = `Telegram credentials missing in Cloudflare environment secrets: ${missing.join(', ')}`;
-    console.warn(`⚠️ [Telegram Bot Dev Mode]: ${reason}`);
+    console.warn(`[Telegram Bot Dev Mode]: ${reason}`);
     return { success: false, reason };
   }
 
@@ -53,11 +53,11 @@ export async function sendTelegramNotification(
       return { success: false, reason };
     }
 
-    console.log('✅ [Telegram Bot]: Notification sent successfully.');
+    console.log('[Telegram Bot]: Notification sent successfully.');
     return { success: true, reason: 'Notification sent successfully to Telegram group.' };
   } catch (error: any) {
     const reason = `Fetch exception: ${error?.message || String(error)}`;
-    console.error('❌ [Telegram Bot Error]:', reason);
+    console.error('[Telegram Bot Error]:', reason);
     return { success: false, reason };
   }
 }
@@ -94,20 +94,20 @@ export async function checkAndNotifyTelegramTaskCreated(
     }
 
     if (shouldNotify) {
-      const frontendUrl = env.FRONTEND_URL || env.VITE_FRONTEND_URL || 'https://reddit-management.pages.dev';
+      const frontendUrl = env.FRONTEND_URL || env.VITE_FRONTEND_URL || 'https://reddit-management.choi.web.id';
       const taskText = taskCount > 1 ? `${taskCount} new tasks have` : 'A new task has';
-      const message = `📢 <b>New Task Available!</b>\n\n${taskText} been added to the platform!\n\n👉 <a href="${frontendUrl}">Log in to claim tasks</a>`;
+      const message = `${taskText} been added to the platform!\n\n<a href="${frontendUrl}">Log in to claim tasks</a>`;
 
       const sendResult = await sendTelegramNotification(env, message);
       return { notified: sendResult.success, reason: sendResult.reason };
     } else {
       const reason = `Cooldown active: The most recent existing task was created ${hoursSinceLast.toFixed(2)} hours ago (less than 12-hour required cooldown).`;
-      console.log(`ℹ️ [Telegram Bot]: ${reason}`);
+      console.log(`[Telegram Bot]: ${reason}`);
       return { notified: false, reason };
     }
   } catch (err: any) {
     const reason = `Cooldown check error: ${err?.message || String(err)}`;
-    console.error('❌ [Telegram Bot Error]:', reason);
+    console.error('[Telegram Bot Error]:', reason);
     return { notified: false, reason };
   }
 }
