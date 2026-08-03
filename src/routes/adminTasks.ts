@@ -360,7 +360,13 @@ adminTasks.put('/tasks/:id', async (c) => {
     }
 
     const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : (quota > 0 ? quota : 1);
-    const restoreSql = restore ? `, deleted_at = NULL` : '';
+
+    let telegramResult = { notified: false, reason: 'Task updated without restoring' };
+    if (restore) {
+      telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
+    }
+
+    const restoreSql = restore ? `, deleted_at = NULL, deadline = CASE WHEN deadline IS NOT NULL AND deadline <= NOW() THEN NULL ELSE deadline END` : '';
 
     const result = await pool.query(
       `UPDATE tasks 
@@ -375,7 +381,12 @@ adminTasks.put('/tasks/:id', async (c) => {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
 
-    return c.json({ success: true, task: result.rows[0] });
+    return c.json({
+      success: true,
+      task: result.rows[0],
+      telegramNotified: telegramResult.notified,
+      telegramReason: telegramResult.reason
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin update task error');
     return c.json(body, status);
@@ -388,12 +399,17 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
     const id = c.req.param('id');
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // If restoring, set deleted_at to NULL. Also if quota is 0, give it at least 1 quota
+    // Check Telegram notification cooldown (12h since latest task) BEFORE restoring task
+    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
+
+    // If restoring, set deleted_at to NULL, update updated_at to NOW()
+    // Also if quota is 0, give it at least 1 quota, and clear deadline if passed
     const result = await pool.query(
       `UPDATE tasks 
        SET deleted_at = NULL, 
            quota = CASE WHEN quota = 0 THEN 1 ELSE quota END,
            original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), quota, 1), 1),
+           deadline = CASE WHEN deadline IS NOT NULL AND deadline <= NOW() THEN NULL ELSE deadline END,
            updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
@@ -404,7 +420,13 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
 
-    return c.json({ success: true, message: 'Task restored successfully', task: result.rows[0] });
+    return c.json({
+      success: true,
+      message: 'Task restored successfully',
+      task: result.rows[0],
+      telegramNotified: telegramResult.notified,
+      telegramReason: telegramResult.reason
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin restore task error');
     return c.json(body, status);
