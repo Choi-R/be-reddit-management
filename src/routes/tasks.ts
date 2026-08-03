@@ -29,9 +29,10 @@ tasks.get('/available', async (c) => {
     // - Task is either unassigned or assigned explicitly to the current user
     // - User has no booking history for this task
     const availableTasks = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota, t.price, t.deadline, tt.type_name
+      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
+              t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level
        FROM tasks t
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE t.quota > 0
          AND (t.deadline IS NULL OR t.deadline > NOW())
          AND (t.assigned_to IS NULL OR t.assigned_to = $1)
@@ -47,10 +48,10 @@ tasks.get('/available', async (c) => {
 
     // Fetch active tasks to help frontend manage states (e.g. show booking warning)
     const activeTask = await pool.query(
-      `SELECT ut.id as booking_id, ut.status_id, ut.created_at as booked_at, t.*, tt.type_name
+      `SELECT ut.id as booking_id, ut.status_id, ut.created_at as booked_at, t.*, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE ut.user_id = $1 AND ut.status_id IN ('incomplete', 'pending')
        ORDER BY ut.created_at DESC`,
       [user.id]
@@ -84,30 +85,19 @@ tasks.post('/book', writeLimiter, async (c) => {
 
     // Run transaction to prevent race conditions (double bookings)
     const booking = await withTransaction(pool, async (client) => {
-      // A1. Get completed tasks count to determine tier and booking limit
-      const completedCheck = await client.query(
-        `SELECT COUNT(*)::int as count FROM user_tasks 
-         WHERE user_id = $1 AND status_id IN ('success', 'paid')`,
+      // A1. Get user's account rank level
+      const userRankRes = await client.query(
+        `SELECT u.rank_id, ar.rank_name, COALESCE(ar.rank_level, 1) as rank_level
+         FROM users u
+         LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+         WHERE u.id = $1`,
         [user.id]
       );
-      const completedCount = completedCheck.rows[0].count;
+      const userRankInfo = userRankRes.rows[0] || { rank_id: 'D', rank_name: 'Rank D', rank_level: 1 };
+      const userRankLevel = userRankInfo.rank_level;
 
       const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
-      let bookingLimit = 1;
-      let tierName = 'Bronze';
-
-      if (isAdmin) {
-        bookingLimit = 99;
-        tierName = 'Admin';
-      } else {
-        if (completedCount >= 15) {
-          bookingLimit = 3;
-          tierName = 'Gold';
-        } else if (completedCount >= 5) {
-          bookingLimit = 2;
-          tierName = 'Silver';
-        }
-      }
+      const bookingLimit = isAdmin ? 99 : 1;
 
       // A2. Check if the user has active bookings (incomplete)
       const activeCheck = await client.query(
@@ -118,7 +108,7 @@ tasks.post('/book', writeLimiter, async (c) => {
       if (activeCheck.rows[0].count >= bookingLimit) {
         throw new BusinessError(
           'LIMIT_EXCEEDED',
-          `Your ${tierName} account (completed: ${completedCount}) can only book at most ${bookingLimit} task${bookingLimit === 1 ? '' : 's'} at a time.`
+          `You can only book at most ${bookingLimit} task${bookingLimit === 1 ? '' : 's'} at a time.`
         );
       }
 
@@ -131,11 +121,15 @@ tasks.post('/book', writeLimiter, async (c) => {
         throw new BusinessError('ALREADY_ATTEMPTED', 'You cannot perform the same task more than once.');
       }
 
-      // C. Lock task row to check and decrement quota safely
+      // C. Lock task row to check quota and minimum rank requirement
       const taskCheck = await client.query(
-        `SELECT quota, COALESCE(NULLIF(original_quota, 0), NULLIF(quota, 0), 1) as original_quota, deadline, assigned_to, deleted_at,
+        `SELECT tasks.quota, COALESCE(NULLIF(tasks.original_quota, 0), NULLIF(tasks.quota, 0), 1) as original_quota,
+                tasks.deadline, tasks.assigned_to, tasks.deleted_at, tasks.min_rank_id,
+                ar.rank_name as min_rank_name, COALESCE(ar.rank_level, 0) as min_rank_level,
                 (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = tasks.id AND ut.status_id = 'failed') as count_failed
-         FROM tasks WHERE id = $1 FOR UPDATE`,
+         FROM tasks
+         LEFT JOIN account_ranks ar ON tasks.min_rank_id = ar.id
+         WHERE tasks.id = $1 FOR UPDATE`,
         [taskId]
       );
       if (taskCheck.rows.length === 0) {
@@ -161,6 +155,17 @@ tasks.post('/book', writeLimiter, async (c) => {
       }
       if (task.assigned_to && task.assigned_to !== user.id) {
         throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
+      }
+
+      // D2. Enforce Minimum Rank Requirement
+      if (task.min_rank_id && !isAdmin) {
+        const requiredRankLevel = typeof task.min_rank_level === 'number' ? task.min_rank_level : 1;
+        if (userRankLevel < requiredRankLevel) {
+          throw new BusinessError(
+            'INSUFFICIENT_RANK',
+            `This task requires ${task.min_rank_name || 'Rank ' + task.min_rank_id}. Your current account rank is ${userRankInfo.rank_name}.`
+          );
+        }
       }
 
       // E. Decrement task quota
@@ -346,10 +351,10 @@ tasks.get('/earnings', async (c) => {
     // A. Fetch task list with payouts
     const history = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
-              t.id as task_id, t.subreddit, t.price, tt.type_name
+              t.id as task_id, t.subreddit, t.price, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE ut.user_id = $1 AND ut.status_id IN ('success', 'paid', 'failed')
        ORDER BY ut.updated_at DESC`,
       [user.id]

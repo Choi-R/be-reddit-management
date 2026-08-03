@@ -27,6 +27,16 @@ CREATE TABLE roles (
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
+-- Table: account_ranks
+CREATE TABLE account_ranks (
+    id TEXT PRIMARY KEY, -- 'D', 'C', 'B', 'A', 'S'
+    rank_name TEXT NOT NULL, -- 'Rank D', 'Rank C', etc.
+    cqm_level TEXT NOT NULL, -- 'Lowest', 'Low', 'Moderate', 'High', 'Highest'
+    rank_level INTEGER NOT NULL, -- 1, 2, 3, 4, 5
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
 -- Table: users
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -36,14 +46,7 @@ CREATE TABLE users (
     reddit TEXT NOT NULL,
     nickname TEXT,
     role_id TEXT REFERENCES roles(id) DEFAULT 'basic' NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
--- Table: task_types
-CREATE TABLE task_types (
-    id TEXT PRIMARY KEY,
-    type_name TEXT NOT NULL,
+    rank_id TEXT REFERENCES account_ranks(id) DEFAULT 'D' NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
@@ -67,7 +70,7 @@ CREATE TABLE tasks (
     assigned_to UUID REFERENCES users(id) ON DELETE SET NULL,
     price DECIMAL(10, 2) NOT NULL,
     deadline TIMESTAMPTZ,
-    type_id TEXT REFERENCES task_types(id) NOT NULL,
+    min_rank_id TEXT REFERENCES account_ranks(id) DEFAULT NULL,
     deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
@@ -91,8 +94,8 @@ CREATE TABLE user_tasks (
 -- 3. Create Triggers for updated_at Autoupdate
 -- -------------------------------------------------------------
 CREATE TRIGGER update_roles_updated_at BEFORE UPDATE ON roles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_account_ranks_updated_at BEFORE UPDATE ON account_ranks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_task_types_updated_at BEFORE UPDATE ON task_types FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_task_status_updated_at BEFORE UPDATE ON task_status FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -104,6 +107,7 @@ CREATE INDEX idx_user_tasks_user_status ON user_tasks(user_id, status_id);
 CREATE INDEX idx_user_tasks_task ON user_tasks(task_id);
 CREATE INDEX idx_tasks_quota_deadline ON tasks(quota, deadline);
 CREATE INDEX idx_users_role ON users(role_id);
+CREATE INDEX idx_users_rank ON users(rank_id);
 
 -- -------------------------------------------------------------
 -- 5. Seed Initial Lookup Tables & Default Admin User
@@ -112,15 +116,15 @@ CREATE INDEX idx_users_role ON users(role_id);
 INSERT INTO roles (id, role_name) VALUES
 ('admin', 'Admin'),
 ('basic', 'Basic'),
-('choi', 'Choi'),
-('bronze', 'Bronze'),
-('silver', 'Silver'),
-('gold', 'Gold');
+('choi', 'Choi');
 
--- Seed: task_types
-INSERT INTO task_types (id, type_name) VALUES
-('normal', 'Normal'),
-('edu_app', 'Edu App');
+-- Seed: account_ranks
+INSERT INTO account_ranks (id, rank_name, cqm_level, rank_level) VALUES
+('D', 'Rank D', 'Lowest', 1),
+('C', 'Rank C', 'Low', 2),
+('B', 'Rank B', 'Moderate', 3),
+('A', 'Rank A', 'High', 4),
+('S', 'Rank S', 'Highest', 5);
 
 -- Seed: task_status
 INSERT INTO task_status (id, status_name) VALUES

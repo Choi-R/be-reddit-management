@@ -22,12 +22,22 @@ export interface Env {
   VITE_TELEGRAM_CHAT_ID?: string;
 }
 
+export interface AccountRank {
+  id: string;
+  rank_name: string;
+  cqm_level: string;
+  rank_level: number;
+}
+
 export interface UserPayload {
   id: string;
   email: string;
   roles: string[];
+  rank_id?: string;
+  account_rank?: AccountRank;
 }
 
 export type Variables = {
   user?: UserPayload;
 };
+

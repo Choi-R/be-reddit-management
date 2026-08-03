@@ -38,11 +38,12 @@ async function resolveUserId(pool: any, identifier: string | null | undefined): 
 adminTasks.post('/tasks', async (c) => {
   try {
     const body = await c.req.json().catch(() => null);
-    if (!body || !body.url || !body.clientRequest || body.quota === undefined || !body.price || !body.typeId) {
-      throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, price, and typeId are required');
+    if (!body || !body.url || !body.clientRequest || body.quota === undefined || !body.price) {
+      throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, and price are required');
     }
 
-    const { url, clientRequest, quota, assignedTo, price, deadline, typeId } = body;
+    const { url, clientRequest, quota, assignedTo, price, deadline, minRankId, min_rank_id } = body;
+    const targetMinRankId = minRankId || min_rank_id || null;
     let subreddit = body.subreddit || null;
 
     if (url) {
@@ -57,7 +58,9 @@ adminTasks.post('/tasks', async (c) => {
     }
     validateStringField(url, 'Reddit URL', 2000);
     validateStringField(clientRequest, 'Client request', 5000);
-    validateStringField(typeId, 'Type ID', 50);
+    if (targetMinRankId) {
+      validateStringField(targetMinRankId, 'Minimum Rank ID', 50);
+    }
 
     if (typeof quota !== 'number' || !Number.isInteger(quota) || quota < 1) {
       throw new BusinessError('INVALID_INPUT', 'Quota must be a positive integer');
@@ -75,19 +78,21 @@ adminTasks.post('/tasks', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
     const resolvedAssignedTo = await resolveUserId(pool, assignedTo);
 
-    const typeCheck = await pool.query('SELECT 1 FROM task_types WHERE id = $1 LIMIT 1', [typeId]);
-    if (typeCheck.rows.length === 0) {
-      throw new BusinessError('INVALID_INPUT', 'Invalid task type ID');
+    if (targetMinRankId) {
+      const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetMinRankId]);
+      if (rankCheck.rows.length === 0) {
+        throw new BusinessError('INVALID_INPUT', 'Invalid minimum rank ID');
+      }
     }
 
     // Check Telegram notification cooldown (12h since latest task) BEFORE inserting new task
     const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
     const result = await pool.query(
-      `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
+      `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, NOW(), NOW())
        RETURNING *`,
-      [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, typeId]
+      [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, targetMinRankId]
     );
 
     return c.json({
@@ -127,7 +132,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
       quota: number;
       price: number;
       deadline: string | null;
-      typeId: string;
+      minRankId: string | null;
     }> = [];
 
     for (let i = 0; i < tasks.length; i++) {
@@ -137,7 +142,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
         throw new BusinessError('INVALID_INPUT', `Task at row ${rowNum} is not a valid object`);
       }
 
-      const { url, clientRequest, deadline, price } = t;
+      const { url, clientRequest, deadline, price, minRankId, min_rank_id, minRank } = t;
 
       if (typeof url !== 'string' || url.trim().length === 0) {
         throw new BusinessError('MISSING_FIELD', `Row ${rowNum}: Reddit URL is required`);
@@ -181,6 +186,11 @@ adminTasks.post('/tasks/bulk', async (c) => {
         throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: Subreddit name is too long (max 200 characters)`);
       }
 
+      const rawMinRank = minRankId || min_rank_id || minRank || null;
+      const targetMinRank = (rawMinRank && ['D', 'C', 'B', 'A', 'S'].includes(rawMinRank.toString().toUpperCase()))
+        ? rawMinRank.toString().toUpperCase()
+        : null;
+
       validatedTasks.push({
         subreddit,
         url,
@@ -188,7 +198,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
         quota: 1,
         price: parsedPrice,
         deadline: parsedDeadline,
-        typeId: 'normal',
+        minRankId: targetMinRank,
       });
     }
 
@@ -199,10 +209,10 @@ adminTasks.post('/tasks/bulk', async (c) => {
       const results = [];
       for (const t of validatedTasks) {
         const res = await client.query(
-          `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, type_id, created_at, updated_at)
+          `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $4, NULL, $5, $6, $7, NOW(), NOW())
            RETURNING *`,
-          [t.subreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.typeId]
+          [t.subreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.minRankId]
         );
         results.push(res.rows[0]);
       }
@@ -247,7 +257,8 @@ adminTasks.get('/tasks', async (c) => {
 
     const tasksList = await pool.query(
       `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
-              t.price, t.deadline, t.type_id, tt.type_name, t.deleted_at, t.created_at, t.updated_at,
+              t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level,
+              t.deleted_at, t.created_at, t.updated_at,
               u.email as assigned_to_email,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'pending') as count_pending,
@@ -255,7 +266,7 @@ adminTasks.get('/tasks', async (c) => {
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'paid') as count_paid,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') as count_failed
        FROM tasks t
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        LEFT JOIN users u ON t.assigned_to = u.id
        ORDER BY t.created_at DESC`
     );
@@ -317,11 +328,12 @@ adminTasks.put('/tasks/:id', async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json().catch(() => null);
-    if (!body || !body.url || !body.clientRequest || body.quota === undefined || !body.price || !body.typeId) {
-      throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, price, and typeId are required');
+    if (!body || !body.url || !body.clientRequest || body.quota === undefined || !body.price) {
+      throw new BusinessError('MISSING_FIELD', 'URL, clientRequest, quota, and price are required');
     }
 
-    const { url, clientRequest, quota, originalQuota, assignedTo, price, deadline, typeId, restore } = body;
+    const { url, clientRequest, quota, originalQuota, assignedTo, price, deadline, minRankId, min_rank_id, restore } = body;
+    const targetMinRankId = minRankId || min_rank_id || null;
     let subreddit = body.subreddit || null;
 
     if (url) {
@@ -336,7 +348,9 @@ adminTasks.put('/tasks/:id', async (c) => {
     }
     validateStringField(url, 'Reddit URL', 2000);
     validateStringField(clientRequest, 'Client request', 5000);
-    validateStringField(typeId, 'Type ID', 50);
+    if (targetMinRankId) {
+      validateStringField(targetMinRankId, 'Minimum Rank ID', 50);
+    }
 
     if (typeof quota !== 'number' || !Number.isInteger(quota) || quota < 0) {
       throw new BusinessError('INVALID_INPUT', 'Quota must be a non-negative integer');
@@ -354,9 +368,11 @@ adminTasks.put('/tasks/:id', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
     const resolvedAssignedTo = await resolveUserId(pool, assignedTo);
 
-    const typeCheck = await pool.query('SELECT 1 FROM task_types WHERE id = $1 LIMIT 1', [typeId]);
-    if (typeCheck.rows.length === 0) {
-      throw new BusinessError('INVALID_INPUT', 'Invalid task type ID');
+    if (targetMinRankId) {
+      const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetMinRankId]);
+      if (rankCheck.rows.length === 0) {
+        throw new BusinessError('INVALID_INPUT', 'Invalid minimum rank ID');
+      }
     }
 
     const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : (quota > 0 ? quota : 1);
@@ -371,10 +387,10 @@ adminTasks.put('/tasks/:id', async (c) => {
     const result = await pool.query(
       `UPDATE tasks 
        SET subreddit = $1, url = $2, client_request = $3, quota = $4, original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), $4, 1), $5),
-           assigned_to = $6, price = $7, deadline = $8, type_id = $9, updated_at = NOW() ${restoreSql}
+           assigned_to = $6, price = $7, deadline = $8, min_rank_id = $9, updated_at = NOW() ${restoreSql}
        WHERE id = $10 
        RETURNING *`,
-      [subreddit || null, url, clientRequest, quota, finalOriginalQuota, resolvedAssignedTo, price, deadline || null, typeId, id]
+      [subreddit || null, url, clientRequest, quota, finalOriginalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
     );
 
     if (result.rows.length === 0) {

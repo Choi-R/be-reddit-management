@@ -16,7 +16,8 @@ adminUsers.post('/users', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email, password, and reddit username are required');
     }
 
-    const { email, password, paypal, reddit, nickname } = body;
+    const { email, password, paypal, reddit, nickname, rankId, rank_id } = body;
+    const targetRankId = rankId || rank_id || 'D';
 
     // Validate inputs
     validateEmail(email);
@@ -39,6 +40,12 @@ adminUsers.post('/users', async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
+    // Validate rankId exists
+    const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetRankId]);
+    if (rankCheck.rows.length === 0) {
+      throw new BusinessError('INVALID_INPUT', 'Invalid account rank ID');
+    }
+
     // Check if user already exists
     const userCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 LIMIT 1', [email]);
     if (userCheck.rows.length > 0) {
@@ -48,13 +55,11 @@ adminUsers.post('/users', async (c) => {
     const securePassword = await createPasswordHash(password);
 
     const newUser = await pool.query(
-      `INSERT INTO users (email, password, paypal, reddit, nickname, role_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 'basic', NOW(), NOW())
-       RETURNING id, email, paypal, reddit, nickname, role_id, created_at`,
-      [email, securePassword, paypal || null, cleanReddit, nickname || null]
+      `INSERT INTO users (email, password, paypal, reddit, nickname, role_id, rank_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'basic', $6, NOW(), NOW())
+       RETURNING id, email, paypal, reddit, nickname, role_id, rank_id, created_at`,
+      [email, securePassword, paypal || null, cleanReddit, nickname || null, targetRankId]
     );
-
-    const createdUser = newUser.rows[0];
 
     try {
       await sendNewUserNotificationEmail(email, cleanReddit, c.env);
@@ -62,20 +67,21 @@ adminUsers.post('/users', async (c) => {
       console.error('Failed to send registration email notification:', emailError);
     }
 
-    return c.json({ success: true, user: newUser });
+    return c.json({ success: true, user: newUser.rows[0] });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin create user error');
     return c.json(body, status);
   }
 });
 
-// 2. Fetch all Basic users with payout metrics
+// 2. Fetch all Basic users with payout metrics and rank info
 adminUsers.get('/users', async (c) => {
   try {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const usersList = await pool.query(
-      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.created_at,
+      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
+              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
               COALESCE(
                 (SELECT SUM(t.price) 
                  FROM user_tasks ut 
@@ -115,35 +121,29 @@ adminUsers.get('/users', async (c) => {
                  0
               ) as failed_count
        FROM users u
-       WHERE u.role_id IN ('basic', 'bronze', 'silver', 'gold')
+       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
        ORDER BY u.email ASC`
     );
 
-    const formattedUsers = usersList.rows.map((row: any) => {
-      const completed = row.completed_tasks_count || 0;
-      let tier = 'Bronze';
-      if (completed >= 15) {
-        tier = 'Gold';
-      } else if (completed >= 5) {
-        tier = 'Silver';
-      }
-
-      return {
-        id: row.id,
-        email: row.email,
-        paypal: row.paypal,
-        reddit: row.reddit,
-        nickname: row.nickname,
-        createdAt: row.created_at,
-        pendingBalance: parseFloat(row.pending_balance),
-        paidBalance: parseFloat(row.paid_balance),
-        completedCount: completed,
-        activeBookingCount: row.active_booking_count || 0,
-        pendingReviewCount: row.pending_review_count || 0,
-        failedCount: row.failed_count || 0,
-        tier: tier,
-      };
-    });
+    const formattedUsers = usersList.rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      paypal: row.paypal,
+      reddit: row.reddit,
+      nickname: row.nickname,
+      roleId: row.role_id,
+      rankId: row.rank_id || 'D',
+      rankName: row.rank_name || 'Rank D',
+      cqmLevel: row.cqm_level || 'Lowest',
+      rankLevel: typeof row.rank_level === 'number' ? row.rank_level : 1,
+      createdAt: row.created_at,
+      pendingBalance: parseFloat(row.pending_balance),
+      paidBalance: parseFloat(row.paid_balance),
+      completedCount: row.completed_tasks_count || 0,
+      activeBookingCount: row.active_booking_count || 0,
+      pendingReviewCount: row.pending_review_count || 0,
+      failedCount: row.failed_count || 0,
+    }));
 
     return c.json({ users: formattedUsers });
   } catch (error: unknown) {
@@ -170,9 +170,10 @@ adminUsers.get('/users/search', async (c) => {
     }
 
     let queryText = `
-      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.created_at
+      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id, ar.rank_name, u.created_at
       FROM users u
-      WHERE u.role_id IN ('basic', 'bronze', 'silver', 'gold')
+      LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+      WHERE 1=1
     `;
 
     let queryParams: any[] = [];
@@ -194,6 +195,8 @@ adminUsers.get('/users/search', async (c) => {
       paypal: row.paypal,
       reddit: row.reddit,
       nickname: row.nickname,
+      rankId: row.rank_id || 'D',
+      rankName: row.rank_name || 'Rank D',
       createdAt: row.created_at,
     }));
 
@@ -211,7 +214,11 @@ adminUsers.get('/users/:id/detail', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const userRes = await pool.query(
-      `SELECT id, email, paypal, reddit, nickname, role_id, created_at FROM users WHERE id = $1`,
+      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
+              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at
+       FROM users u
+       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+       WHERE u.id = $1`,
       [id]
     );
     if (userRes.rows.length === 0) {
@@ -248,25 +255,20 @@ adminUsers.get('/users/:id/detail', async (c) => {
     const paidBalance = parseFloat(counts.paid_balance || 0);
     const totalBalance = pendingBalance + paidBalance;
 
-    let tier = 'Bronze';
-    let bookingLimit = 1;
-    if (isAdmin) {
-      tier = 'Admin';
-      bookingLimit = 99;
-    } else if (completedCount >= 15) {
-      tier = 'Gold';
-      bookingLimit = 3;
-    } else if (completedCount >= 5) {
-      tier = 'Silver';
-      bookingLimit = 2;
-    }
+    const bookingLimit = isAdmin ? 99 : 1;
+    const accountRank = {
+      id: user.rank_id || 'D',
+      rank_name: user.rank_name || 'Rank D',
+      cqm_level: user.cqm_level || 'Lowest',
+      rank_level: typeof user.rank_level === 'number' ? user.rank_level : 1,
+    };
 
     const activeBookingsRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, tt.type_name
+              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE ut.user_id = $1 AND ut.status_id = 'incomplete'
        ORDER BY ut.created_at DESC`,
       [id]
@@ -274,10 +276,10 @@ adminUsers.get('/users/:id/detail', async (c) => {
 
     const pendingSubmissionsRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, tt.type_name
+              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE ut.user_id = $1 AND ut.status_id = 'pending'
        ORDER BY ut.updated_at DESC`,
       [id]
@@ -285,10 +287,10 @@ adminUsers.get('/users/:id/detail', async (c) => {
 
     const taskHistoryRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, tt.type_name
+              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
-       JOIN task_types tt ON t.type_id = tt.id
+       LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE ut.user_id = $1
        ORDER BY ut.updated_at DESC
        LIMIT 50`,
@@ -304,8 +306,12 @@ adminUsers.get('/users/:id/detail', async (c) => {
           paypal: user.paypal,
           reddit: user.reddit,
           nickname: user.nickname,
+          roleId: user.role_id,
           createdAt: user.created_at,
-          tier,
+          rankId: accountRank.id,
+          rankName: accountRank.rank_name,
+          cqmLevel: accountRank.cqm_level,
+          rankLevel: accountRank.rank_level,
           bookingLimit,
         },
         metrics: {
@@ -331,7 +337,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
   }
 });
 
-// 4. Update a Basic User account (Profile Info Only)
+// 4. Update a User account profile and rank
 adminUsers.put('/users/:id', async (c) => {
   try {
     const id = c.req.param('id');
@@ -340,7 +346,8 @@ adminUsers.put('/users/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email and Reddit username/link are required');
     }
 
-    const { email, paypal, reddit, nickname } = body;
+    const { email, paypal, reddit, nickname, rankId, rank_id } = body;
+    const targetRankId = rankId || rank_id || null;
 
     validateEmail(email);
     if (paypal) {
@@ -368,11 +375,19 @@ adminUsers.put('/users/:id', async (c) => {
       throw new BusinessError('DUPLICATE', 'User with this email already exists');
     }
 
+    if (targetRankId) {
+      const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetRankId]);
+      if (rankCheck.rows.length === 0) {
+        throw new BusinessError('INVALID_INPUT', 'Invalid account rank ID');
+      }
+    }
+
     const query = `UPDATE users 
-             SET email = $1, paypal = $2, reddit = $3, nickname = $4, updated_at = NOW() 
-             WHERE id = $5 
-             RETURNING id, email, paypal, reddit, nickname, created_at`;
-    const params = [email, paypal || null, cleanReddit, nickname || null, id];
+             SET email = $1, paypal = $2, reddit = $3, nickname = $4,
+                 rank_id = COALESCE($5, rank_id), updated_at = NOW() 
+             WHERE id = $6 
+             RETURNING id, email, paypal, reddit, nickname, role_id, rank_id, created_at`;
+    const params = [email, paypal || null, cleanReddit, nickname || null, targetRankId, id];
 
     const result = await pool.query(query, params);
     return c.json({ success: true, user: result.rows[0] });

@@ -25,8 +25,14 @@ auth.post(
     const { email, password } = body;
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // 1. Retrieve the user by email
-    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    // 1. Retrieve the user by email with rank info
+    const userResult = await pool.query(
+      `SELECT u.*, ar.rank_name, ar.cqm_level, ar.rank_level
+       FROM users u
+       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+       WHERE u.email = $1`,
+      [email]
+    );
     if (userResult.rows.length === 0) {
       return c.json({ error: 'Invalid email or password' }, 401);
     }
@@ -40,31 +46,14 @@ auth.post(
 
     // 3. Retrieve user role directly from user record
     const primaryRole = user.role_id || 'basic';
-    let roles = [primaryRole];
+    const roles = [primaryRole];
 
-    // Map 'basic' role to dynamic tier (bronze, silver, gold) based on completed tasks
-    const hasBasicOrBronze = roles.includes('basic') || roles.includes('bronze');
-    if (hasBasicOrBronze) {
-      const completedCheck = await pool.query(
-        `SELECT COUNT(*)::int as count FROM user_tasks 
-         WHERE user_id = $1 AND status_id IN ('success', 'paid')`,
-        [user.id]
-      );
-      const completedCount = completedCheck.rows[0].count;
-
-      let tier = 'bronze';
-      if (completedCount >= 15) {
-        tier = 'gold';
-      } else if (completedCount >= 5) {
-        tier = 'silver';
-      }
-
-      // Replace 'basic' with the computed tier
-      roles = roles.map((r: string) => r === 'basic' ? tier : r);
-      if (!roles.includes(tier)) {
-        roles.push(tier);
-      }
-    }
+    const accountRank = {
+      id: user.rank_id || 'D',
+      rank_name: user.rank_name || 'Rank D',
+      cqm_level: user.cqm_level || 'Lowest',
+      rank_level: typeof user.rank_level === 'number' ? user.rank_level : 1,
+    };
 
     // 4. Sign standard-compliant JWT token valid for 24 hours
     const now = Math.floor(Date.now() / 1000);
@@ -72,6 +61,8 @@ auth.post(
       id: user.id,
       email: user.email,
       roles: roles,
+      rank_id: accountRank.id,
+      account_rank: accountRank,
       iss: 'reddit-crm-api',
       aud: 'reddit-crm-client',
       iat: now,
@@ -86,12 +77,29 @@ auth.post(
         email: user.email,
         paypal: user.paypal,
         reddit: user.reddit,
+        nickname: user.nickname,
         role_id: user.role_id,
         roles: roles,
+        rank_id: accountRank.id,
+        account_rank: accountRank,
       },
     });
   } catch (error: any) {
     console.error('Auth login handler error:', error);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+});
+
+// GET /ranks - Fetch all available account ranks
+auth.get('/ranks', async (c) => {
+  try {
+    const pool = getDbPool(c.env.DATABASE_URL);
+    const result = await pool.query(
+      'SELECT id, rank_name, cqm_level, rank_level FROM account_ranks ORDER BY rank_level ASC'
+    );
+    return c.json({ ranks: result.rows });
+  } catch (error: any) {
+    console.error('Fetch account ranks error:', error);
     return c.json({ error: 'Internal Server Error' }, 500);
   }
 });
