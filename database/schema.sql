@@ -35,18 +35,9 @@ CREATE TABLE users (
     paypal TEXT,
     reddit TEXT NOT NULL,
     nickname TEXT,
+    role_id TEXT REFERENCES roles(id) DEFAULT 'basic' NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
--- Table: user_roles
-CREATE TABLE user_roles (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
-    role_id TEXT REFERENCES roles(id) ON DELETE CASCADE NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    UNIQUE(user_id, role_id)
 );
 
 -- Table: task_types
@@ -101,7 +92,6 @@ CREATE TABLE user_tasks (
 -- -------------------------------------------------------------
 CREATE TRIGGER update_roles_updated_at BEFORE UPDATE ON roles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_user_roles_updated_at BEFORE UPDATE ON user_roles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_task_types_updated_at BEFORE UPDATE ON task_types FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_task_status_updated_at BEFORE UPDATE ON task_status FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -113,7 +103,7 @@ CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH
 CREATE INDEX idx_user_tasks_user_status ON user_tasks(user_id, status_id);
 CREATE INDEX idx_user_tasks_task ON user_tasks(task_id);
 CREATE INDEX idx_tasks_quota_deadline ON tasks(quota, deadline);
-CREATE INDEX idx_user_roles_user ON user_roles(user_id);
+CREATE INDEX idx_users_role ON users(role_id);
 
 -- -------------------------------------------------------------
 -- 5. Seed Initial Lookup Tables & Default Admin User
@@ -146,26 +136,16 @@ INSERT INTO task_status (id, status_name) VALUES
 -- Salt: seedsalt1234
 -- Salted Hash (SHA-256 of "AdminCRM2026!seedsalt1234"): 4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
 -- Final password entry format: seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
-INSERT INTO users (id, email, password, paypal, reddit) VALUES
-('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82', 'admin@paypal.com', 'reddit_admin');
-
--- Associate user with 'admin' role
-INSERT INTO user_roles (user_id, role_id) VALUES
-('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin');
+INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
+('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82', 'admin@paypal.com', 'reddit_admin', 'admin');
 
 -- Seed: Rahmaditya Admin User (Password Raw: rahmadityac@gmail.com)
-INSERT INTO users (id, email, password, paypal, reddit) VALUES
-('b1e86950-8b1e-450f-a7b3-241517454f01', 'rahmadityac@gmail.com', 'seedsalt1234:a7c0e615071295699d004477d022eed1dbb9bfcb70ada633e3867b2905d23d69', NULL, 'reddit_rahmadityac');
-
-INSERT INTO user_roles (user_id, role_id) VALUES
-('b1e86950-8b1e-450f-a7b3-241517454f01', 'admin');
+INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
+('b1e86950-8b1e-450f-a7b3-241517454f01', 'rahmadityac@gmail.com', 'seedsalt1234:a7c0e615071295699d004477d022eed1dbb9bfcb70ada633e3867b2905d23d69', NULL, 'reddit_rahmadityac', 'admin');
 
 -- Seed: Kellirun Admin User (Password Raw: kb.kellirun@gmail.com)
-INSERT INTO users (id, email, password, paypal, reddit) VALUES
-('c1e86950-8b1e-450f-a7b3-241517454f02', 'kb.kellirun@gmail.com', 'seedsalt1234:a3c4eb604947b1910a9a501ce3ab02df71b885126fa38046c96cca5f42484af9', NULL, 'reddit_kb_kellirun');
-
-INSERT INTO user_roles (user_id, role_id) VALUES
-('c1e86950-8b1e-450f-a7b3-241517454f02', 'admin');
+INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
+('c1e86950-8b1e-450f-a7b3-241517454f02', 'kb.kellirun@gmail.com', 'seedsalt1234:a3c4eb604947b1910a9a501ce3ab02df71b885126fa38046c96cca5f42484af9', NULL, 'reddit_kb_kellirun', 'admin');
 
 -- -------------------------------------------------------------
 -- 6. Password Reset Tokens Table

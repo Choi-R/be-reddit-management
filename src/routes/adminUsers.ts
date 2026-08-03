@@ -47,24 +47,14 @@ adminUsers.post('/users', async (c) => {
 
     const securePassword = await createPasswordHash(password);
 
-    const newUser = await withTransaction(pool, async (client) => {
-      const userInsert = await client.query(
-        `INSERT INTO users (email, password, paypal, reddit, nickname, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-         RETURNING id, email, paypal, reddit, nickname, created_at`,
-        [email, securePassword, paypal || null, cleanReddit, nickname || null]
-      );
+    const newUser = await pool.query(
+      `INSERT INTO users (email, password, paypal, reddit, nickname, role_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'basic', NOW(), NOW())
+       RETURNING id, email, paypal, reddit, nickname, role_id, created_at`,
+      [email, securePassword, paypal || null, cleanReddit, nickname || null]
+    );
 
-      const createdUser = userInsert.rows[0];
-
-      await client.query(
-        `INSERT INTO user_roles (user_id, role_id, created_at, updated_at)
-         VALUES ($1, 'basic', NOW(), NOW())`,
-        [createdUser.id]
-      );
-
-      return createdUser;
-    });
+    const createdUser = newUser.rows[0];
 
     try {
       await sendNewUserNotificationEmail(email, cleanReddit, c.env);
@@ -125,9 +115,7 @@ adminUsers.get('/users', async (c) => {
                  0
               ) as failed_count
        FROM users u
-       WHERE EXISTS (
-         SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id IN ('basic', 'bronze', 'silver', 'gold')
-       )
+       WHERE u.role_id IN ('basic', 'bronze', 'silver', 'gold')
        ORDER BY u.email ASC`
     );
 
@@ -184,9 +172,7 @@ adminUsers.get('/users/search', async (c) => {
     let queryText = `
       SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.created_at
       FROM users u
-      WHERE EXISTS (
-        SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_id IN ('basic', 'bronze', 'silver', 'gold')
-      )
+      WHERE u.role_id IN ('basic', 'bronze', 'silver', 'gold')
     `;
 
     let queryParams: any[] = [];
@@ -225,7 +211,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const userRes = await pool.query(
-      `SELECT id, email, paypal, reddit, nickname, created_at FROM users WHERE id = $1`,
+      `SELECT id, email, paypal, reddit, nickname, role_id, created_at FROM users WHERE id = $1`,
       [id]
     );
     if (userRes.rows.length === 0) {
@@ -233,11 +219,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
     }
     const user = userRes.rows[0];
 
-    const adminCheck = await pool.query(
-      `SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id IN ('admin', 'choi') LIMIT 1`,
-      [id]
-    );
-    const isAdmin = adminCheck.rows.length > 0;
+    const isAdmin = user.role_id === 'admin' || user.role_id === 'choi';
 
     const statusCountsRes = await pool.query(
       `SELECT 

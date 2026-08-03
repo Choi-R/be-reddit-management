@@ -50,10 +50,25 @@ CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
 CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at);
 
 ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS admin_note TEXT;
+ALTER TABLE user_tasks DROP COLUMN IF EXISTS rejection_reason;
 
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_quota INTEGER;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 UPDATE tasks SET original_quota = quota WHERE original_quota IS NULL;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role_id TEXT REFERENCES roles(id) DEFAULT 'basic';
+
+DO $$ 
+BEGIN 
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='user_roles') THEN 
+    UPDATE users SET role_id = ur.role_id FROM user_roles ur WHERE users.id = ur.user_id; 
+  END IF; 
+END $$;
+
+UPDATE users SET role_id = 'basic' WHERE role_id IS NULL;
+ALTER TABLE users ALTER COLUMN role_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);
+DROP TABLE IF EXISTS user_roles;
 `;
 
 async function run() {
@@ -61,7 +76,7 @@ async function run() {
     await client.connect();
     console.log('Connected. Running migration schema SQL...');
     await client.query(sql);
-    console.log('Migration successful: password_resets table and indexes created.');
+    console.log('Migration successful: user_roles refactored into users.role_id.');
   } catch (err) {
     console.error('Migration failed:', err);
     process.exit(1);

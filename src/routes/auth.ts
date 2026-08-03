@@ -38,9 +38,9 @@ auth.post(
       return c.json({ error: 'Invalid email or password' }, 401);
     }
 
-    // 3. Retrieve user roles
-    const rolesResult = await pool.query('SELECT role_id FROM user_roles WHERE user_id = $1', [user.id]);
-    let roles = rolesResult.rows.map((row: any) => row.role_id);
+    // 3. Retrieve user role directly from user record
+    const primaryRole = user.role_id || 'basic';
+    let roles = [primaryRole];
 
     // Map 'basic' role to dynamic tier (bronze, silver, gold) based on completed tasks
     const hasBasicOrBronze = roles.includes('basic') || roles.includes('bronze');
@@ -86,6 +86,7 @@ auth.post(
         email: user.email,
         paypal: user.paypal,
         reddit: user.reddit,
+        role_id: user.role_id,
         roles: roles,
       },
     });
