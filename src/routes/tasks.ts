@@ -85,43 +85,7 @@ tasks.post('/book', writeLimiter, async (c) => {
 
     // Run transaction to prevent race conditions (double bookings)
     const booking = await withTransaction(pool, async (client) => {
-      // A1. Get user's account rank level
-      const userRankRes = await client.query(
-        `SELECT u.rank_id, ar.rank_name, COALESCE(ar.rank_level, 1) as rank_level
-         FROM users u
-         LEFT JOIN account_ranks ar ON u.rank_id = ar.id
-         WHERE u.id = $1`,
-        [user.id]
-      );
-      const userRankInfo = userRankRes.rows[0] || { rank_id: 'D', rank_name: 'Rank D', rank_level: 1 };
-      const userRankLevel = userRankInfo.rank_level;
-
-      const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
-      const bookingLimit = isAdmin ? 99 : 1;
-
-      // A2. Check if the user has active bookings (incomplete)
-      const activeCheck = await client.query(
-        `SELECT COUNT(*)::int as count FROM user_tasks 
-         WHERE user_id = $1 AND status_id = 'incomplete'`,
-        [user.id]
-      );
-      if (activeCheck.rows[0].count >= bookingLimit) {
-        throw new BusinessError(
-          'LIMIT_EXCEEDED',
-          `You can only book at most ${bookingLimit} task${bookingLimit === 1 ? '' : 's'} at a time.`
-        );
-      }
-
-      // B. Check if user already did this task previously
-      const historyCheck = await client.query(
-        `SELECT 1 FROM user_tasks WHERE user_id = $1 AND task_id = $2 LIMIT 1`,
-        [user.id, taskId]
-      );
-      if (historyCheck.rows.length > 0) {
-        throw new BusinessError('ALREADY_ATTEMPTED', 'You cannot perform the same task more than once.');
-      }
-
-      // C. Lock task row to check quota and minimum rank requirement
+      // A1. Lock task row first to serialize concurrent booking attempts
       const taskCheck = await client.query(
         `SELECT tasks.quota, COALESCE(NULLIF(tasks.original_quota, 0), NULLIF(tasks.quota, 0), 1) as original_quota,
                 tasks.deadline, tasks.assigned_to, tasks.deleted_at, tasks.min_rank_id,
@@ -138,7 +102,43 @@ tasks.post('/book', writeLimiter, async (c) => {
 
       const task = taskCheck.rows[0];
 
-      // D. Verify task properties
+      // A2. Get user's account rank level
+      const userRankRes = await client.query(
+        `SELECT u.rank_id, ar.rank_name, COALESCE(ar.rank_level, 1) as rank_level
+         FROM users u
+         LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+         WHERE u.id = $1`,
+        [user.id]
+      );
+      const userRankInfo = userRankRes.rows[0] || { rank_id: 'D', rank_name: 'Rank D', rank_level: 1 };
+      const userRankLevel = userRankInfo.rank_level;
+
+      const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
+      const bookingLimit = isAdmin ? 99 : 1;
+
+      // A3. Check if the user has active bookings (incomplete)
+      const activeCheck = await client.query(
+        `SELECT COUNT(*)::int as count FROM user_tasks 
+         WHERE user_id = $1 AND status_id = 'incomplete'`,
+        [user.id]
+      );
+      if (activeCheck.rows[0].count >= bookingLimit) {
+        throw new BusinessError(
+          'LIMIT_EXCEEDED',
+          `You can only book at most ${bookingLimit} task${bookingLimit === 1 ? '' : 's'} at a time.`
+        );
+      }
+
+      // B. Check if user already did this task previously (now protected by FOR UPDATE lock)
+      const historyCheck = await client.query(
+        `SELECT 1 FROM user_tasks WHERE user_id = $1 AND task_id = $2 LIMIT 1`,
+        [user.id, taskId]
+      );
+      if (historyCheck.rows.length > 0) {
+        throw new BusinessError('ALREADY_ATTEMPTED', 'You cannot perform the same task more than once.');
+      }
+
+      // C. Verify task properties
       if (task.deleted_at) {
         throw new BusinessError('EXPIRED', 'This task has been archived.');
       }
@@ -157,7 +157,7 @@ tasks.post('/book', writeLimiter, async (c) => {
         throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
       }
 
-      // D2. Enforce Minimum Rank Requirement
+      // C2. Enforce Minimum Rank Requirement
       if (task.min_rank_id && !isAdmin) {
         const requiredRankLevel = typeof task.min_rank_level === 'number' ? task.min_rank_level : 1;
         if (userRankLevel < requiredRankLevel) {
@@ -168,21 +168,28 @@ tasks.post('/book', writeLimiter, async (c) => {
         }
       }
 
-      // E. Decrement task quota
+      // D. Decrement task quota
       await client.query(
         `UPDATE tasks SET quota = quota - 1, updated_at = NOW() WHERE id = $1`,
         [taskId]
       );
 
-      // F. Create user_tasks record (status: incomplete)
-      const insertResult = await client.query(
-        `INSERT INTO user_tasks (user_id, task_id, status_id, created_at, updated_at)
-         VALUES ($1, $2, 'incomplete', NOW(), NOW())
-         RETURNING *`,
-        [user.id, taskId]
-      );
+      // E. Create user_tasks record (status: incomplete)
+      try {
+        const insertResult = await client.query(
+          `INSERT INTO user_tasks (user_id, task_id, status_id, created_at, updated_at)
+           VALUES ($1, $2, 'incomplete', NOW(), NOW())
+           RETURNING *`,
+          [user.id, taskId]
+        );
 
-      return insertResult.rows[0];
+        return insertResult.rows[0];
+      } catch (err: unknown) {
+        if (err && typeof err === 'object' && 'code' in err && err.code === '23505') {
+          throw new BusinessError('ALREADY_ATTEMPTED', 'You cannot perform the same task more than once.');
+        }
+        throw err;
+      }
     });
 
     return c.json({ success: true, booking });
