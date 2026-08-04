@@ -93,7 +93,7 @@ tasks.post('/book', writeLimiter, async (c) => {
                 (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = tasks.id AND ut.status_id = 'failed') as count_failed
          FROM tasks
          LEFT JOIN account_ranks ar ON tasks.min_rank_id = ar.id
-         WHERE tasks.id = $1 FOR UPDATE`,
+         WHERE tasks.id = $1 FOR UPDATE OF tasks`,
         [taskId]
       );
       if (taskCheck.rows.length === 0) {
