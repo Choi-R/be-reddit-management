@@ -74,56 +74,89 @@ adminUsers.post('/users', async (c) => {
   }
 });
 
-// 2. Fetch all Basic users with payout metrics and rank info
+// 2. Fetch all Basic users with payout metrics and rank info (supports search, sort, cqs filter)
 adminUsers.get('/users', async (c) => {
   try {
+    const search = (c.req.query('search') || c.req.query('q') || '').trim();
+    const cqs = (c.req.query('cqs') || c.req.query('rankId') || c.req.query('rank') || '').trim().toUpperCase();
+    const sortBy = (c.req.query('sortBy') || c.req.query('sort_by') || '').trim().toLowerCase();
+    const sortOrder = (c.req.query('sortOrder') || c.req.query('order') || '').trim().toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    const usersList = await pool.query(
-      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
-              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
-              COALESCE(
-                (SELECT SUM(t.price) 
-                 FROM user_tasks ut 
-                 JOIN tasks t ON ut.task_id = t.id 
-                 WHERE ut.user_id = u.id AND ut.status_id = 'success'), 
-                 0.00
-              ) as pending_balance,
-              COALESCE(
-                (SELECT SUM(t.price) 
-                 FROM user_tasks ut 
-                 JOIN tasks t ON ut.task_id = t.id 
-                 WHERE ut.user_id = u.id AND ut.status_id = 'paid'), 
-                 0.00
-              ) as paid_balance,
-              COALESCE(
-                (SELECT COUNT(*)::int 
-                 FROM user_tasks ut 
-                 WHERE ut.user_id = u.id AND ut.status_id IN ('success', 'paid')), 
-                 0
-              ) as completed_tasks_count,
-              COALESCE(
-                (SELECT COUNT(*)::int 
-                 FROM user_tasks ut 
-                 WHERE ut.user_id = u.id AND ut.status_id = 'incomplete'), 
-                 0
-              ) as active_booking_count,
-              COALESCE(
-                (SELECT COUNT(*)::int 
-                 FROM user_tasks ut 
-                 WHERE ut.user_id = u.id AND ut.status_id = 'pending'), 
-                 0
-              ) as pending_review_count,
-              COALESCE(
-                (SELECT COUNT(*)::int 
-                 FROM user_tasks ut 
-                 WHERE ut.user_id = u.id AND ut.status_id = 'failed'), 
-                 0
-              ) as failed_count
-       FROM users u
-       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
-       ORDER BY u.email ASC`
-    );
+    let queryText = `
+      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
+             ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
+             COALESCE(
+               (SELECT SUM(t.price) 
+                FROM user_tasks ut 
+                JOIN tasks t ON ut.task_id = t.id 
+                WHERE ut.user_id = u.id AND ut.status_id = 'success'), 
+                0.00
+             ) as pending_balance,
+             COALESCE(
+               (SELECT SUM(t.price) 
+                FROM user_tasks ut 
+                JOIN tasks t ON ut.task_id = t.id 
+                WHERE ut.user_id = u.id AND ut.status_id = 'paid'), 
+                0.00
+             ) as paid_balance,
+             COALESCE(
+               (SELECT COUNT(*)::int 
+                FROM user_tasks ut 
+                WHERE ut.user_id = u.id AND ut.status_id IN ('success', 'paid')), 
+                0
+             ) as completed_tasks_count,
+             COALESCE(
+               (SELECT COUNT(*)::int 
+                FROM user_tasks ut 
+                WHERE ut.user_id = u.id AND ut.status_id = 'incomplete'), 
+                0
+             ) as active_booking_count,
+             COALESCE(
+               (SELECT COUNT(*)::int 
+                FROM user_tasks ut 
+                WHERE ut.user_id = u.id AND ut.status_id = 'pending'), 
+                0
+             ) as pending_review_count,
+             COALESCE(
+               (SELECT COUNT(*)::int 
+                FROM user_tasks ut 
+                WHERE ut.user_id = u.id AND ut.status_id = 'failed'), 
+                0
+             ) as failed_count
+      FROM users u
+      LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+      WHERE 1=1
+    `;
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (search) {
+      queryText += ` AND (u.nickname ILIKE $${paramIndex} OR u.email ILIKE $${paramIndex} OR u.reddit ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (cqs && cqs !== 'ALL') {
+      queryText += ` AND UPPER(u.rank_id) = $${paramIndex}`;
+      params.push(cqs);
+      paramIndex++;
+    }
+
+    let orderByClause = `ORDER BY u.email ASC`;
+    if (sortBy === 'cqs' || sortBy === 'rank') {
+      orderByClause = `ORDER BY COALESCE(ar.rank_level, 1) ${sortOrder}, LOWER(u.email) ASC`;
+    } else if (sortBy === 'jointime' || sortBy === 'created_at' || sortBy === 'createdat') {
+      orderByClause = `ORDER BY u.created_at ${sortOrder}`;
+    } else if (sortBy === 'abc' || sortBy === 'alphabetical') {
+      orderByClause = `ORDER BY LOWER(COALESCE(NULLIF(u.nickname, ''), u.reddit, u.email)) ${sortOrder}`;
+    }
+
+    queryText += ` ${orderByClause}`;
+
+    const usersList = await pool.query(queryText, params);
 
     const formattedUsers = usersList.rows.map((row: any) => ({
       id: row.id,
