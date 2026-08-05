@@ -396,4 +396,84 @@ tasks.get('/earnings', async (c) => {
   }
 });
 
+// 5. Fetch full personal tasking history with filtering for the current user
+tasks.get('/history', async (c) => {
+  try {
+    const user = c.get('user')!;
+    const rawStatuses = c.req.query('statuses') || c.req.query('status') || '';
+    const search = (c.req.query('search') || '').trim();
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // Parse status array if provided
+    let statusFilter: string[] = [];
+    if (rawStatuses) {
+      statusFilter = rawStatuses
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => ['incomplete', 'pending', 'success', 'paid', 'failed'].includes(s));
+    }
+
+    const whereClauses: string[] = ['ut.user_id = $1'];
+    const queryParams: any[] = [user.id];
+    let paramIdx = 2;
+
+    if (statusFilter.length > 0) {
+      whereClauses.push(`ut.status_id = ANY($${paramIdx})`);
+      queryParams.push(statusFilter);
+      paramIdx++;
+    }
+
+    if (search) {
+      whereClauses.push(
+        `(t.subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx} OR ut.note ILIKE $${paramIdx} OR ut.admin_note ILIKE $${paramIdx})`
+      );
+      queryParams.push(`%${search}%`);
+      paramIdx++;
+    }
+
+    const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+
+    const historyQuery = `
+      SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note,
+             ut.created_at, ut.updated_at,
+             t.id as task_id, t.subreddit, t.url as task_url, t.client_request, t.price, t.deadline,
+             ar.rank_name as min_rank_name
+      FROM user_tasks ut
+      JOIN tasks t ON ut.task_id = t.id
+      LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
+      ${whereSql}
+      ORDER BY ut.updated_at DESC, ut.created_at DESC
+    `;
+
+    const statusCountsQuery = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN ut.status_id = 'incomplete' THEN 1 ELSE 0 END)::int, 0) as incomplete,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'pending' THEN 1 ELSE 0 END)::int, 0) as pending,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'success' THEN 1 ELSE 0 END)::int, 0) as success,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'paid' THEN 1 ELSE 0 END)::int, 0) as paid,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'failed' THEN 1 ELSE 0 END)::int, 0) as failed,
+        COUNT(*)::int as total
+      FROM user_tasks ut
+      WHERE ut.user_id = $1
+    `;
+
+    const [historyRes, countsRes] = await Promise.all([
+      pool.query(historyQuery, queryParams),
+      pool.query(statusCountsQuery, [user.id]),
+    ]);
+
+    return c.json({
+      success: true,
+      history: historyRes.rows,
+      total: historyRes.rows.length,
+      statusCounts: countsRes.rows[0] || { incomplete: 0, pending: 0, success: 0, paid: 0, failed: 0, total: 0 },
+    });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Fetch user tasking history error');
+    return c.json(body, status);
+  }
+});
+
 export default tasks;
+

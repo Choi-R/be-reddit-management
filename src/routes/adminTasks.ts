@@ -489,4 +489,84 @@ adminTasks.delete('/tasks/:id', async (c) => {
   }
 });
 
+// 7. Retrieve complete Tasking History across all users for Admin
+adminTasks.get('/tasks/history', async (c) => {
+  try {
+    const rawStatuses = c.req.query('statuses') || c.req.query('status') || '';
+    const search = (c.req.query('search') || '').trim();
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    // Parse status array if provided
+    let statusFilter: string[] = [];
+    if (rawStatuses) {
+      statusFilter = rawStatuses
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => ['incomplete', 'pending', 'success', 'paid', 'failed'].includes(s));
+    }
+
+    const whereClauses: string[] = [];
+    const queryParams: any[] = [];
+    let paramIdx = 1;
+
+    if (statusFilter.length > 0) {
+      whereClauses.push(`ut.status_id = ANY($${paramIdx})`);
+      queryParams.push(statusFilter);
+      paramIdx++;
+    }
+
+    if (search) {
+      whereClauses.push(
+        `(u.email ILIKE $${paramIdx} OR u.reddit ILIKE $${paramIdx} OR u.nickname ILIKE $${paramIdx} OR t.subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx})`
+      );
+      queryParams.push(`%${search}%`);
+      paramIdx++;
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const historyQuery = `
+      SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note,
+             ut.created_at, ut.updated_at,
+             u.id as user_id, u.email as user_email, u.reddit as user_reddit, u.nickname as user_nickname,
+             t.id as task_id, t.subreddit, t.url as task_url, t.client_request, t.price, t.deadline
+      FROM user_tasks ut
+      JOIN users u ON ut.user_id = u.id
+      JOIN tasks t ON ut.task_id = t.id
+      ${whereSql}
+      ORDER BY ut.updated_at DESC, ut.created_at DESC
+    `;
+
+    const statusCountsQuery = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN ut.status_id = 'incomplete' THEN 1 ELSE 0 END)::int, 0) as incomplete,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'pending' THEN 1 ELSE 0 END)::int, 0) as pending,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'success' THEN 1 ELSE 0 END)::int, 0) as success,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'paid' THEN 1 ELSE 0 END)::int, 0) as paid,
+        COALESCE(SUM(CASE WHEN ut.status_id = 'failed' THEN 1 ELSE 0 END)::int, 0) as failed,
+        COUNT(*)::int as total
+      FROM user_tasks ut
+      JOIN users u ON ut.user_id = u.id
+      JOIN tasks t ON ut.task_id = t.id
+    `;
+
+    const [historyRes, countsRes] = await Promise.all([
+      pool.query(historyQuery, queryParams),
+      pool.query(statusCountsQuery),
+    ]);
+
+    return c.json({
+      success: true,
+      history: historyRes.rows,
+      total: historyRes.rows.length,
+      statusCounts: countsRes.rows[0] || { incomplete: 0, pending: 0, success: 0, paid: 0, failed: 0, total: 0 },
+    });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin fetch tasking history error');
+    return c.json(body, status);
+  }
+});
+
 export default adminTasks;
+
