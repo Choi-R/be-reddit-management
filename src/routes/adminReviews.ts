@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { getDbPool, withTransaction } from '../db/connection';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
+import { sendTelegramNotification } from '../utils/telegram';
 
 const adminReviews = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -25,9 +26,13 @@ adminReviews.post('/tasks/review', async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    const { updatedBooking, quotaReturned } = await withTransaction(pool, async (client) => {
+    const { updatedBooking, quotaReturned, userReddit, subreddit } = await withTransaction(pool, async (client) => {
       const bookingCheck = await client.query(
-        `SELECT task_id FROM user_tasks WHERE id = $1 AND status_id = 'pending' FOR UPDATE`,
+        `SELECT ut.task_id, u.reddit as user_reddit, t.subreddit
+         FROM user_tasks ut
+         JOIN users u ON ut.user_id = u.id
+         JOIN tasks t ON ut.task_id = t.id
+         WHERE ut.id = $1 AND ut.status_id = 'pending' FOR UPDATE`,
         [bookingId]
       );
 
@@ -36,6 +41,8 @@ adminReviews.post('/tasks/review', async (c) => {
       }
 
       const taskId = bookingCheck.rows[0].task_id;
+      const userReddit = bookingCheck.rows[0].user_reddit;
+      const subreddit = bookingCheck.rows[0].subreddit;
 
       const updateResult = await client.query(
         `UPDATE user_tasks 
@@ -60,10 +67,27 @@ adminReviews.post('/tasks/review', async (c) => {
       return {
         updatedBooking: updateResult.rows[0],
         quotaReturned: returnedQuota,
+        userReddit,
+        subreddit,
       };
     });
 
-    return c.json({ success: true, booking: updatedBooking, quotaReturned });
+    let telegramNotified = false;
+    let telegramReason = '';
+
+    if (statusId === 'success') {
+      const redditUser = userReddit ? `u/${userReddit}` : 'a user';
+      const subredditText = subreddit ? ` in r/${subreddit}` : '';
+      const frontendUrl = c.env.FRONTEND_URL || c.env.VITE_FRONTEND_URL || 'https://reddit-management.choi.web.id';
+
+      const message = `A task submission by <b>${redditUser}</b>${subredditText} was approved! 🎉\n\n<a href="${frontendUrl}">Log in to claim available tasks</a>`;
+
+      const sendResult = await sendTelegramNotification(c.env, message);
+      telegramNotified = sendResult.success;
+      telegramReason = sendResult.reason;
+    }
+
+    return c.json({ success: true, booking: updatedBooking, quotaReturned, telegramNotified, telegramReason });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin review submission error');
     return c.json(body, status);
