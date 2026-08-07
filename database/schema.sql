@@ -85,6 +85,7 @@ CREATE TABLE user_tasks (
     reply_url TEXT,
     note TEXT,
     admin_note TEXT,
+    submitted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     UNIQUE(user_id, task_id) -- User cannot perform the same task more than once

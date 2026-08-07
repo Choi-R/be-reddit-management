@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
 CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at);
 
 ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS admin_note TEXT;
+ALTER TABLE user_tasks ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ;
 ALTER TABLE user_tasks DROP COLUMN IF EXISTS rejection_reason;
 
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_quota INTEGER;

@@ -17,11 +17,81 @@ const writeLimiter = rateLimiter({
 // All routes in this module require a valid authenticated session
 tasks.use('/*', authMiddleware());
 
+interface CooldownResult {
+  isActive: boolean;
+  cooldownUntil: string | null;
+  remainingMs: number;
+  lastSubmittedAt: string | null;
+  reason: string | null;
+}
+
+async function getUserCooldownStatus(
+  userId: string,
+  executor: { query: (sql: string, params: any[]) => Promise<any> },
+  isAdmin: boolean
+): Promise<CooldownResult> {
+  if (isAdmin) {
+    return {
+      isActive: false,
+      cooldownUntil: null,
+      remainingMs: 0,
+      lastSubmittedAt: null,
+      reason: null,
+    };
+  }
+
+  const result = await executor.query(
+    `SELECT COALESCE(submitted_at, updated_at) as submit_time
+     FROM user_tasks
+     WHERE user_id = $1 
+       AND (submitted_at IS NOT NULL OR status_id IN ('pending', 'success', 'paid', 'failed'))
+     ORDER BY COALESCE(submitted_at, updated_at) DESC
+     LIMIT 1`,
+    [userId]
+  );
+
+  if (result.rows.length === 0 || !result.rows[0].submit_time) {
+    return {
+      isActive: false,
+      cooldownUntil: null,
+      remainingMs: 0,
+      lastSubmittedAt: null,
+      reason: null,
+    };
+  }
+
+  const lastSubmittedAt = new Date(result.rows[0].submit_time);
+  const cooldownMs = 2 * 24 * 60 * 60 * 1000; // 48 hours
+  const cooldownUntil = new Date(lastSubmittedAt.getTime() + cooldownMs);
+  const now = new Date();
+
+  if (now < cooldownUntil) {
+    const remainingMs = cooldownUntil.getTime() - now.getTime();
+    const remainingHours = Math.ceil(remainingMs / (1000 * 60 * 60));
+    return {
+      isActive: true,
+      cooldownUntil: cooldownUntil.toISOString(),
+      remainingMs,
+      lastSubmittedAt: lastSubmittedAt.toISOString(),
+      reason: `A 2-day cooldown period is active following your recent task submission. Next booking available in approximately ${remainingHours} hours.`,
+    };
+  }
+
+  return {
+    isActive: false,
+    cooldownUntil: cooldownUntil.toISOString(),
+    remainingMs: 0,
+    lastSubmittedAt: lastSubmittedAt.toISOString(),
+    reason: null,
+  };
+}
+
 // 1. Fetch available tasks for the current user
 tasks.get('/available', async (c) => {
   try {
     const user = c.get('user')!;
     const pool = getDbPool(c.env.DATABASE_URL);
+    const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
 
     // Query details:
     // - Quota must be > 0
@@ -57,9 +127,12 @@ tasks.get('/available', async (c) => {
       [user.id]
     );
 
+    const cooldown = await getUserCooldownStatus(user.id, pool, isAdmin);
+
     return c.json({
       available: availableTasks.rows,
-      active: activeTask.rows
+      active: activeTask.rows,
+      cooldown
     });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Fetch available tasks error');
@@ -115,6 +188,16 @@ tasks.post('/book', writeLimiter, async (c) => {
 
       const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
       const bookingLimit = isAdmin ? 99 : 1;
+
+      // A2.5. Check 2-day post-submission cooldown restriction
+      const cooldown = await getUserCooldownStatus(user.id, client, isAdmin);
+      if (cooldown.isActive) {
+        const remainingHours = Math.ceil(cooldown.remainingMs / (1000 * 60 * 60));
+        throw new BusinessError(
+          'COOLDOWN_ACTIVE',
+          `You cannot book a task right now. A 2-day cooldown period is active following your task submission on ${new Date(cooldown.lastSubmittedAt!).toLocaleString()}. Available in approx ${remainingHours} hours.`
+        );
+      }
 
       // A3. Check if the user has active bookings (incomplete)
       const activeCheck = await client.query(
@@ -332,7 +415,7 @@ tasks.post('/submit', writeLimiter, async (c) => {
     // 4. Update state to pending if it is currently incomplete
     const result = await pool.query(
       `UPDATE user_tasks 
-       SET status_id = 'pending', reply_url = $1, note = COALESCE($2, note), updated_at = NOW()
+       SET status_id = 'pending', reply_url = $1, note = COALESCE($2, note), submitted_at = NOW(), updated_at = NOW()
        WHERE user_id = $3 AND task_id = $4 AND status_id = 'incomplete'
        RETURNING *`,
       [replyUrl, note || null, user.id, taskId]
