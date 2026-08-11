@@ -58,6 +58,7 @@ END $$;
 
 -- 2. Seed account_ranks
 INSERT INTO account_ranks (id, rank_name, cqm_level, rank_level) VALUES
+('E', 'Rank E', 'Banned', 0),
 ('D', 'Rank D', 'Lowest', 1),
 ('C', 'Rank C', 'Low', 2),
 ('B', 'Rank B', 'Moderate', 3),

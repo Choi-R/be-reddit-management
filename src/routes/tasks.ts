@@ -240,14 +240,22 @@ tasks.post('/book', writeLimiter, async (c) => {
         throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
       }
 
-      // C2. Enforce Minimum Rank Requirement
-      if (task.min_rank_id && !isAdmin) {
-        const requiredRankLevel = typeof task.min_rank_level === 'number' ? task.min_rank_level : 1;
-        if (userRankLevel < requiredRankLevel) {
+      // C2. Enforce Minimum Rank Requirement & Rank E (Banned Account) restriction
+      if (!isAdmin) {
+        if (userRankInfo.rank_id === 'E' || userRankLevel <= 0) {
           throw new BusinessError(
             'INSUFFICIENT_RANK',
-            `This task requires ${task.min_rank_name || 'Rank ' + task.min_rank_id}. Your current account rank is ${userRankInfo.rank_name}.`
+            'Your account is Rank E (banned account) and cannot book or perform any tasks.'
           );
+        }
+        if (task.min_rank_id) {
+          const requiredRankLevel = typeof task.min_rank_level === 'number' ? task.min_rank_level : 1;
+          if (userRankLevel < requiredRankLevel) {
+            throw new BusinessError(
+              'INSUFFICIENT_RANK',
+              `This task requires ${task.min_rank_name || 'Rank ' + task.min_rank_id}. Your current account rank is ${userRankInfo.rank_name}.`
+            );
+          }
         }
       }
 
