@@ -18,7 +18,22 @@ app.use('*', async (c, next) => {
     return c.text('Forbidden: Crawler / Bot access is denied.', 403);
   }
   
+  // Set comprehensive Security Headers (Anti-Clickjacking, Anti-XSS, CSP, Robots protection)
   c.header('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  c.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none';");
+  await next();
+});
+
+// Protect dotfiles and sensitive config paths (.env, .git, etc.)
+app.use('*', async (c, next) => {
+  const path = c.req.path.toLowerCase();
+  if (path.includes('/.') || path.includes('/env') || path.includes('/config') || path.includes('/aws')) {
+    return c.json({ error: 'Access Denied', status: 403 }, 403);
+  }
   await next();
 });
 
@@ -53,6 +68,17 @@ app.route('/api/cron', cron);
 
 // Base route health check
 app.get('/', (c) => c.text('Reddit CRM API Service (Hono Edge)'));
+
+// 404 Handler for undefined routes (Prevents Soft 404 returning 200)
+app.notFound((c) => {
+  return c.json({ error: 'Endpoint Not Found', status: 404 }, 404);
+});
+
+// Centralized error handling (Prevents sensitive internal stack traces from leaking)
+app.onError((err, c) => {
+  console.error('Unhandled API Error:', err);
+  return c.json({ error: 'Internal Server Error', status: 500 }, 500);
+});
 
 // Export fetch and scheduled events for Cloudflare Workers
 export default {
