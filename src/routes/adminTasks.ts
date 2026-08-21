@@ -246,7 +246,7 @@ adminTasks.post('/tasks/test-telegram', async (c) => {
   }
 });
 
-// 3. Retrieve all Tasks partitioned into Active and Archived
+// 3. Retrieve all Tasks partitioned into Active, Archived, and Unrestorable
 adminTasks.get('/tasks', async (c) => {
   try {
     const pool = getDbPool(c.env.DATABASE_URL);
@@ -258,7 +258,7 @@ adminTasks.get('/tasks', async (c) => {
     const tasksList = await pool.query(
       `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level,
-              t.deleted_at, t.created_at, t.updated_at,
+              t.deleted_at, t.is_unrestorable, t.created_at, t.updated_at,
               u.email as assigned_to_email,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'pending') as count_pending,
@@ -273,12 +273,14 @@ adminTasks.get('/tasks', async (c) => {
 
     const activeTasks: any[] = [];
     const archivedTasks: any[] = [];
+    const unrestorableTasks: any[] = [];
     const now = new Date();
 
     for (const task of tasksList.rows) {
       const origQuota = (typeof task.original_quota === 'number' && task.original_quota > 0)
         ? task.original_quota
         : ((typeof task.quota === 'number' && task.quota > 0) ? task.quota : 1);
+      const isUnrestorable = task.is_unrestorable === true;
       const isDeleted = task.deleted_at !== null && task.deleted_at !== undefined;
       const isDeadlineUp = task.deadline ? new Date(task.deadline) <= now : false;
       const countActive = (task.count_incomplete || 0) + (task.count_pending || 0);
@@ -287,9 +289,15 @@ adminTasks.get('/tasks', async (c) => {
       const maxFailThreshold = 3 * origQuota;
       const isFailedMax = (task.count_failed || 0) >= maxFailThreshold;
 
-      const isArchived = isDeleted || isDeadlineUp || isQuotaDepleted || isFailedMax;
-
-      if (isArchived) {
+      if (isUnrestorable) {
+        unrestorableTasks.push({
+          ...task,
+          original_quota: origQuota,
+          is_archived: true,
+          is_unrestorable: true,
+          archive_reason: 'Unrestorable / Deleted from Archive',
+        });
+      } else if (isDeleted || isDeadlineUp || isQuotaDepleted || isFailedMax) {
         let reason = '';
         if (isDeleted) {
           reason = 'Deleted by Admin';
@@ -305,6 +313,7 @@ adminTasks.get('/tasks', async (c) => {
           ...task,
           original_quota: origQuota,
           is_archived: true,
+          is_unrestorable: false,
           archive_reason: reason,
         });
       } else {
@@ -312,11 +321,12 @@ adminTasks.get('/tasks', async (c) => {
           ...task,
           original_quota: origQuota,
           is_archived: false,
+          is_unrestorable: false,
         });
       }
     }
 
-    return c.json({ tasks: activeTasks, archivedTasks, allTasks: tasksList.rows });
+    return c.json({ tasks: activeTasks, archivedTasks, unrestorableTasks, allTasks: tasksList.rows });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin fetch tasks error');
     return c.json(body, status);
@@ -381,6 +391,13 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     let telegramResult = { notified: false, reason: 'Task updated without restoring' };
     if (restore) {
+      const taskCheck = await pool.query('SELECT is_unrestorable FROM tasks WHERE id = $1', [id]);
+      if (taskCheck.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'Task not found');
+      }
+      if (taskCheck.rows[0].is_unrestorable) {
+        throw new BusinessError('CANNOT_RESTORE', 'This task is in unrestorable tasks and cannot be restored.');
+      }
       telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
     }
 
@@ -432,6 +449,14 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
     const id = c.req.param('id');
     const pool = getDbPool(c.env.DATABASE_URL);
 
+    const taskCheck = await pool.query('SELECT is_unrestorable FROM tasks WHERE id = $1', [id]);
+    if (taskCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'Task not found');
+    }
+    if (taskCheck.rows[0].is_unrestorable) {
+      throw new BusinessError('CANNOT_RESTORE', 'This task is in unrestorable tasks and cannot be restored.');
+    }
+
     // Check Telegram notification cooldown (12h since latest task) BEFORE restoring task
     const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
@@ -472,21 +497,34 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
   }
 });
 
-// 6. Delete a Task configuration (Soft Delete by default, Permanent Delete if specified or already soft-deleted)
+// 6. Delete a Task configuration
+// - Active task -> Moved to Archived tasks (Soft Delete)
+// - Archived task -> Moved to Unrestorable tasks (Trash / Unrestorable, preserving user history)
+// - Explicit permanent query parameter with 0 user_tasks -> Hard Deleted
 adminTasks.delete('/tasks/:id', async (c) => {
   try {
     const id = c.req.param('id');
     const permanent = c.req.query('permanent') === 'true';
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    const taskCheck = await pool.query('SELECT deleted_at FROM tasks WHERE id = $1', [id]);
+    const taskCheck = await pool.query(
+      `SELECT t.id, t.quota, t.deadline, t.deleted_at, t.is_unrestorable,
+              COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
+              (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
+              (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'pending') as count_pending,
+              (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') as count_failed
+       FROM tasks t
+       WHERE t.id = $1`,
+      [id]
+    );
     if (taskCheck.rows.length === 0) {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
 
-    const isAlreadySoftDeleted = taskCheck.rows[0].deleted_at !== null;
+    const task = taskCheck.rows[0];
 
-    if (permanent || isAlreadySoftDeleted) {
+    // If hard delete is requested
+    if (permanent) {
       const userTasksCheck = await pool.query(
         'SELECT COUNT(*)::int as count FROM user_tasks WHERE task_id = $1',
         [id]
@@ -494,17 +532,56 @@ adminTasks.delete('/tasks/:id', async (c) => {
       const userTasksCount = userTasksCheck.rows[0].count;
 
       if (userTasksCount > 0) {
-        throw new BusinessError(
-          'CANNOT_DELETE',
-          `Cannot permanently delete task because ${userTasksCount} user booking(s)/submission(s) exist for it. The task will remain in Archived Tasks to preserve user records and earnings.`
+        // Move to unrestorable tasks to preserve user records and earnings
+        await pool.query(
+          `UPDATE tasks SET is_unrestorable = TRUE, deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW() WHERE id = $1`,
+          [id]
         );
+        return c.json({
+          success: true,
+          message: `Task has ${userTasksCount} user submission(s). It has been moved to Unrestorable tasks to preserve user history and earnings.`,
+          unrestorable: true
+        });
       }
 
       await pool.query(`DELETE FROM tasks WHERE id = $1`, [id]);
       return c.json({ success: true, message: 'Task permanently deleted successfully' });
+    }
+
+    if (task.is_unrestorable) {
+      return c.json({ success: true, message: 'Task is already in Unrestorable tasks' });
+    }
+
+    const now = new Date();
+    const origQuota = task.original_quota || 1;
+    const isAlreadySoftDeleted = task.deleted_at !== null && task.deleted_at !== undefined;
+    const isDeadlineUp = task.deadline ? new Date(task.deadline) <= now : false;
+    const countActive = (task.count_incomplete || 0) + (task.count_pending || 0);
+    const isQuotaDepleted = task.quota === 0 && countActive === 0;
+    const isFailedMax = (task.count_failed || 0) >= (3 * origQuota);
+
+    const isArchived = isAlreadySoftDeleted || isDeadlineUp || isQuotaDepleted || isFailedMax;
+
+    if (isArchived) {
+      // Deleting a task that is currently archived moves it to Unrestorable tasks bucket
+      await pool.query(
+        `UPDATE tasks SET is_unrestorable = TRUE, deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+      return c.json({
+        success: true,
+        message: 'Task moved to Unrestorable tasks successfully'
+      });
     } else {
-      await pool.query(`UPDATE tasks SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`, [id]);
-      return c.json({ success: true, message: 'Task moved to Archived tasks successfully' });
+      // Deleting an active task moves it to Archived tasks
+      await pool.query(
+        `UPDATE tasks SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+      return c.json({
+        success: true,
+        message: 'Task moved to Archived tasks successfully'
+      });
     }
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin delete task error');

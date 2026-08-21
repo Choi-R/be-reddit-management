@@ -226,7 +226,7 @@ Creates a new coordinated task.
   ```
 
 #### `GET /api/admin/tasks`
-Lists all tasks and detailed booking status aggregates.
+Lists all tasks partitioned into Active, Archived, and Unrestorable buckets.
 * **Headers**: `Authorization: Bearer <admin_token>`
 * **Success Response (200 OK)**:
   ```json
@@ -235,23 +235,54 @@ Lists all tasks and detailed booking status aggregates.
       {
         "id": "e9641772-2bb8-410a-9d62-9e90956c3822",
         "subreddit": "reactjs",
-        "post_url": "...",
+        "url": "https://reddit.com/r/reactjs/comments/example",
         "client_request": "...",
         "quota": 4,
+        "original_quota": 5,
         "price": "5.00",
         "deadline": "2026-07-15T23:59:59.000Z",
-        "type_id": "normal",
-        "type_name": "Normal",
+        "min_rank_name": "Rank D",
         "assigned_to_email": null,
+        "is_archived": false,
+        "is_unrestorable": false,
         "count_incomplete": 0,
         "count_pending": 1,
         "count_success": 0,
         "count_paid": 0,
         "count_failed": 0
       }
+    ],
+    "archivedTasks": [
+      {
+        "id": "c1641772-2bb8-410a-9d62-9e90956c3811",
+        "subreddit": "technology",
+        "url": "https://reddit.com/r/technology/comments/example",
+        "is_archived": true,
+        "is_unrestorable": false,
+        "archive_reason": "Quota Depleted (5/5 Completed)"
+      }
+    ],
+    "unrestorableTasks": [
+      {
+        "id": "b0641772-2bb8-410a-9d62-9e90956c3899",
+        "subreddit": "gaming",
+        "url": "https://reddit.com/r/gaming/comments/example",
+        "is_archived": true,
+        "is_unrestorable": true,
+        "archive_reason": "Unrestorable / Deleted from Archive"
+      }
     ]
   }
   ```
+
+#### `DELETE /api/admin/tasks/:id`
+Deletes a task configuration according to its current lifecycle state:
+* **From Active**: Soft-deletes the task and moves it to `archivedTasks`.
+* **From Archived**: Moves the task to `unrestorableTasks` to prevent archive clutter while preserving all `user_tasks` foreign keys, worker earnings, and history records.
+* **Permanent (`?permanent=true`)**: Hard-deletes if 0 user bookings exist. If user submissions exist, safely moves to `unrestorableTasks`.
+
+#### `POST /api/admin/tasks/:id/restore`
+Restores an archived task back to `tasks` (Active). Rejects restoring tasks that are in `unrestorableTasks` (`CANNOT_RESTORE`).
 
 #### `POST /api/admin/tasks/review`
 Approves or rejects a user task submission.

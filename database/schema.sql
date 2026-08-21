@@ -72,6 +72,7 @@ CREATE TABLE tasks (
     deadline TIMESTAMPTZ,
     min_rank_id TEXT REFERENCES account_ranks(id) DEFAULT NULL,
     deleted_at TIMESTAMPTZ,
+    is_unrestorable BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
@@ -107,6 +108,7 @@ CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH
 CREATE INDEX idx_user_tasks_user_status ON user_tasks(user_id, status_id);
 CREATE INDEX idx_user_tasks_task ON user_tasks(task_id);
 CREATE INDEX idx_tasks_quota_deadline ON tasks(quota, deadline);
+CREATE INDEX idx_tasks_is_unrestorable ON tasks(is_unrestorable);
 CREATE INDEX idx_users_role ON users(role_id);
 CREATE INDEX idx_users_rank ON users(rank_id);
 

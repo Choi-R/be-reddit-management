@@ -107,6 +107,7 @@ tasks.get('/available', async (c) => {
          AND (t.deadline IS NULL OR t.deadline > NOW())
          AND (t.assigned_to IS NULL OR t.assigned_to = $1)
          AND t.deleted_at IS NULL
+         AND t.is_unrestorable = FALSE
          AND (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') < (3 * COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1))
          AND NOT EXISTS (
            SELECT 1 FROM user_tasks ut 
@@ -161,7 +162,7 @@ tasks.post('/book', writeLimiter, async (c) => {
       // A1. Lock task row first to serialize concurrent booking attempts
       const taskCheck = await client.query(
         `SELECT tasks.quota, COALESCE(NULLIF(tasks.original_quota, 0), NULLIF(tasks.quota, 0), 1) as original_quota,
-                tasks.deadline, tasks.assigned_to, tasks.deleted_at, tasks.min_rank_id,
+                tasks.deadline, tasks.assigned_to, tasks.deleted_at, tasks.is_unrestorable, tasks.min_rank_id,
                 ar.rank_name as min_rank_name, COALESCE(ar.rank_level, 0) as min_rank_level,
                 (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = tasks.id AND ut.status_id = 'failed') as count_failed
          FROM tasks
@@ -222,6 +223,9 @@ tasks.post('/book', writeLimiter, async (c) => {
       }
 
       // C. Verify task properties
+      if (task.is_unrestorable) {
+        throw new BusinessError('EXPIRED', 'This task is no longer available.');
+      }
       if (task.deleted_at) {
         throw new BusinessError('EXPIRED', 'This task has been archived.');
       }

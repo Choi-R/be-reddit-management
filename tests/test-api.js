@@ -299,14 +299,17 @@ async function runTests() {
 
     const failBookRes = await apiRequest('/api/tasks/book', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${basicToken}` },
+      headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ taskId: failTaskId }),
     });
+    if (failBookRes.status !== 200) {
+      throw new Error(`Failed to book failTestTask: ${JSON.stringify(failBookRes.data)}`);
+    }
     const failBookingId = failBookRes.data.booking.id;
 
     await apiRequest('/api/tasks/submit', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${basicToken}` },
+      headers: { Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({
         taskId: failTaskId,
         replyUrl: `https://reddit.com/r/test/comments/reply_${Date.now()}`,
