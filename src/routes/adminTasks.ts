@@ -375,7 +375,9 @@ adminTasks.put('/tasks/:id', async (c) => {
       }
     }
 
-    const finalOriginalQuota = typeof originalQuota === 'number' && originalQuota > 0 ? originalQuota : (quota > 0 ? quota : 1);
+    const targetTotalQuota = typeof originalQuota === 'number' && originalQuota > 0 
+      ? originalQuota 
+      : (typeof quota === 'number' && quota > 0 ? quota : 1);
 
     let telegramResult = { notified: false, reason: 'Task updated without restoring' };
     if (restore) {
@@ -386,11 +388,26 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     const result = await pool.query(
       `UPDATE tasks 
-       SET subreddit = $1, url = $2, client_request = $3, quota = $4, original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), $4, 1), $5),
-           assigned_to = $6, price = $7, deadline = $8, min_rank_id = $9, updated_at = NOW() ${restoreSql}
-       WHERE id = $10 
+       SET subreddit = $1, 
+           url = $2, 
+           client_request = $3, 
+           quota = GREATEST(0, $4 - (
+             SELECT COUNT(*)::int 
+             FROM user_tasks 
+             WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid')
+           )), 
+           original_quota = GREATEST(
+             $4, 
+             (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid'))
+           ),
+           assigned_to = $5, 
+           price = $6, 
+           deadline = $7, 
+           min_rank_id = $8, 
+           updated_at = NOW() ${restoreSql}
+       WHERE id = $9 
        RETURNING *`,
-      [subreddit || null, url, clientRequest, quota, finalOriginalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
+      [subreddit || null, url, clientRequest, targetTotalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
     );
 
     if (result.rows.length === 0) {
@@ -423,8 +440,14 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
     const result = await pool.query(
       `UPDATE tasks 
        SET deleted_at = NULL, 
-           quota = CASE WHEN quota = 0 THEN 1 ELSE quota END,
-           original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), quota, 1), 1),
+           quota = CASE 
+             WHEN quota = 0 THEN 1 
+             ELSE quota 
+           END,
+           original_quota = GREATEST(
+             COALESCE(NULLIF(original_quota, 0), 1),
+             (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid')) + (CASE WHEN quota = 0 THEN 1 ELSE quota END)
+           ),
            deadline = CASE WHEN deadline IS NOT NULL AND deadline <= NOW() THEN NULL ELSE deadline END,
            updated_at = NOW()
        WHERE id = $1
