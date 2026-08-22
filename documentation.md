@@ -226,7 +226,7 @@ Creates a new coordinated task.
   ```
 
 #### `GET /api/admin/tasks`
-Lists all tasks partitioned into Active, Archived, and Unrestorable buckets.
+Lists all tasks partitioned into Active, Archived, Completed, and Deleted buckets.
 * **Headers**: `Authorization: Bearer <admin_token>`
 * **Success Response (200 OK)**:
   ```json
@@ -244,7 +244,7 @@ Lists all tasks partitioned into Active, Archived, and Unrestorable buckets.
         "min_rank_name": "Rank D",
         "assigned_to_email": null,
         "is_archived": false,
-        "is_unrestorable": false,
+        "is_deleted": false,
         "count_incomplete": 0,
         "count_pending": 1,
         "count_success": 0,
@@ -258,31 +258,43 @@ Lists all tasks partitioned into Active, Archived, and Unrestorable buckets.
         "subreddit": "technology",
         "url": "https://reddit.com/r/technology/comments/example",
         "is_archived": true,
-        "is_unrestorable": false,
+        "is_deleted": false
+      }
+    ],
+    "completedTasks": [
+      {
+        "id": "a2641772-2bb8-410a-9d62-9e90956c3844",
+        "subreddit": "news",
+        "url": "https://reddit.com/r/news/comments/example",
+        "is_completed": true,
+        "is_archived": false,
+        "is_deleted": false,
         "archive_reason": "Quota Depleted (5/5 Completed)"
       }
     ],
-    "unrestorableTasks": [
+    "deletedTasks": [
       {
         "id": "b0641772-2bb8-410a-9d62-9e90956c3899",
         "subreddit": "gaming",
         "url": "https://reddit.com/r/gaming/comments/example",
-        "is_archived": true,
-        "is_unrestorable": true,
-        "archive_reason": "Unrestorable / Deleted from Archive"
+        "is_deleted": true,
+        "is_archived": false
       }
     ]
   }
   ```
 
-#### `DELETE /api/admin/tasks/:id`
-Deletes a task configuration according to its current lifecycle state:
-* **From Active**: Soft-deletes the task and moves it to `archivedTasks`.
-* **From Archived**: Moves the task to `unrestorableTasks` to prevent archive clutter while preserving all `user_tasks` foreign keys, worker earnings, and history records.
-* **Permanent (`?permanent=true`)**: Hard-deletes if 0 user bookings exist. If user submissions exist, safely moves to `unrestorableTasks`.
+#### `POST /api/admin/tasks/:id/archive`
+Explicitly archives an active or completed task (`is_archived = TRUE`), moving it into the `archivedTasks` list.
+* **Headers**: `Authorization: Bearer <admin_token>`
 
 #### `POST /api/admin/tasks/:id/restore`
-Restores an archived task back to `tasks` (Active). Rejects restoring tasks that are in `unrestorableTasks` (`CANNOT_RESTORE`).
+Restores an archived task back to `tasks` (Active), resetting `is_archived = FALSE`. Rejects restoring soft-deleted tasks (`CANNOT_RESTORE`).
+* **Headers**: `Authorization: Bearer <admin_token>`
+
+#### `DELETE /api/admin/tasks/:id`
+Soft-deletes a task by setting `deleted_at = NOW()`, moving it to `deletedTasks`. Irreversible on the site, while preserving all `user_tasks` foreign keys, worker earnings, and history logs.
+* **Headers**: `Authorization: Bearer <admin_token>`
 
 #### `POST /api/admin/tasks/review`
 Approves or rejects a user task submission.
