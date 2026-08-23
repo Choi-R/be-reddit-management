@@ -415,29 +415,32 @@ tasks.post('/submit', writeLimiter, async (c) => {
       }
     }
 
-    // 3. Ensure the reply URL has not been submitted previously (duplicate prevention)
-    const duplicateCheck = await pool.query(
-      'SELECT 1 FROM user_tasks WHERE reply_url = $1 LIMIT 1',
-      [replyUrl]
-    );
-    if (duplicateCheck.rows.length > 0) {
-      throw new BusinessError('DUPLICATE_SUBMISSION', 'This Reddit URL has already been submitted for a task.');
-    }
+    // 3. Atomically verify duplicate URL and submit task inside a transaction
+    const booking = await withTransaction(pool, async (client) => {
+      const duplicateCheck = await client.query(
+        'SELECT 1 FROM user_tasks WHERE reply_url = $1 LIMIT 1',
+        [replyUrl]
+      );
+      if (duplicateCheck.rows.length > 0) {
+        throw new BusinessError('DUPLICATE_SUBMISSION', 'This Reddit URL has already been submitted for a task.');
+      }
 
-    // 4. Update state to pending if it is currently incomplete
-    const result = await pool.query(
-      `UPDATE user_tasks 
-       SET status_id = 'pending', reply_url = $1, note = COALESCE($2, note), submitted_at = NOW(), updated_at = NOW()
-       WHERE user_id = $3 AND task_id = $4 AND status_id = 'incomplete'
-       RETURNING *`,
-      [replyUrl, note || null, user.id, taskId]
-    );
+      const result = await client.query(
+        `UPDATE user_tasks 
+         SET status_id = 'pending', reply_url = $1, note = COALESCE($2, note), submitted_at = NOW(), updated_at = NOW()
+         WHERE user_id = $3 AND task_id = $4 AND status_id = 'incomplete'
+         RETURNING *`,
+        [replyUrl, note || null, user.id, taskId]
+      );
 
-    if (result.rows.length === 0) {
-      throw new BusinessError('NOT_FOUND', 'No active incomplete booking found for this task');
-    }
+      if (result.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'No active incomplete booking found for this task');
+      }
 
-    return c.json({ success: true, booking: result.rows[0] });
+      return result.rows[0];
+    });
+
+    return c.json({ success: true, booking });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Submit task error');
     return c.json(body, status);

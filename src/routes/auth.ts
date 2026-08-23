@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
-import { getDbPool } from '../db/connection';
+import { getDbPool, withTransaction } from '../db/connection';
 import { verifyPassword, createPasswordHash } from '../utils/crypto';
 import { sendResetPasswordEmail } from '../utils/email';
 import { Env } from '../types';
@@ -193,16 +193,11 @@ auth.post(
     // 2. Generate a new password hash
     const hashedPassword = await createPasswordHash(password);
 
-    // 3. Update password and delete reset tokens inside a transaction
-    await pool.query('BEGIN');
-    try {
-      await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
-      await pool.query('DELETE FROM password_resets WHERE email = $1', [email]);
-      await pool.query('COMMIT');
-    } catch (dbError) {
-      await pool.query('ROLLBACK');
-      throw dbError;
-    }
+    // 3. Update password and delete reset tokens inside an atomic transaction
+    await withTransaction(pool, async (client) => {
+      await client.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
+      await client.query('DELETE FROM password_resets WHERE email = $1', [email]);
+    });
 
     return c.json({
       success: true,

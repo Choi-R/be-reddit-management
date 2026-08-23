@@ -251,10 +251,6 @@ adminTasks.get('/tasks', async (c) => {
   try {
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    await pool.query(
-      `UPDATE tasks SET original_quota = GREATEST(COALESCE(NULLIF(original_quota, 0), NULLIF(quota, 0), 1), 1) WHERE original_quota IS NULL OR original_quota < 1`
-    ).catch(() => {});
-
     const tasksList = await pool.query(
       `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level,

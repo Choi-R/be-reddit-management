@@ -18,7 +18,7 @@ cron.post('/cleanup', async (c) => {
     // Execute queries in a single transaction block for full database safety
     const cleanupSummary = await withTransaction(pool, async (client) => {
       // CTE 1: Expiration of 60-Hour Bookings
-      // Deletes user_tasks matching criteria and increments the related task quota
+      // Deletes user_tasks matching criteria and restores the exact quota per task
       const expirationResult = await client.query(`
         WITH deleted_tasks AS (
             DELETE FROM user_tasks ut
@@ -27,16 +27,21 @@ cron.post('/cleanup', async (c) => {
               AND ut.status_id = 'incomplete'
               AND ut.created_at < NOW() - INTERVAL '60 hours'
               AND t.assigned_to IS NULL
-            RETURNING ut.task_id, ut.id as booking_id
+            RETURNING ut.task_id
+        ),
+        quota_deltas AS (
+            SELECT task_id, COUNT(*)::int as delta
+            FROM deleted_tasks
+            GROUP BY task_id
         ),
         updated_quotas AS (
             UPDATE tasks t
-            SET quota = t.quota + 1, updated_at = NOW()
-            FROM deleted_tasks dt
-            WHERE t.id = dt.task_id
+            SET quota = t.quota + qd.delta, updated_at = NOW()
+            FROM quota_deltas qd
+            WHERE t.id = qd.task_id
             RETURNING t.id
         )
-        SELECT COUNT(*)::int as count FROM deleted_tasks;
+        SELECT COALESCE(SUM(delta), 0)::int as count FROM quota_deltas;
       `);
 
       const expiredCount = expirationResult.rows[0].count;

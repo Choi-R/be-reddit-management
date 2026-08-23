@@ -8,7 +8,7 @@ interface RateLimitConfig {
 }
 
 export const rateLimiter = (config: RateLimitConfig): MiddlewareHandler<{ Bindings: Env; Variables: Variables }> => {
-  // In-memory request tracker specific to this middleware instance
+  // ponytail: In-memory tracker is isolate-local. Multi-POP edge traffic can exceed global limit. Upgrade to Cloudflare Rate Limiting / Workers KV if strict distributed enforcement is needed.
   const tracker = new Map<string, number[]>();
   return async (c, next) => {
     // 1. Identify client using Cloudflare's standard header or X-Forwarded-For fallback
