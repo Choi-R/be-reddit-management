@@ -37,6 +37,9 @@ Authenticates a user and returns a session JWT.
       "id": "8a329d47-6997-447a-9db1-cc72cb5e612a",
       "email": "user@redditcrm.com",
       "paypal": "user_paypal@paypal.com",
+      "paymentInfo": [
+        { "id": "...", "type": "paypal", "account_details": { "username": "user_paypal@paypal.com" } }
+      ],
       "reddit": "reddit_username",
       "roles": ["basic"]
     }
@@ -170,7 +173,9 @@ Creates a basic user account and hashes the password securely.
   {
     "email": "newuser@redditcrm.com",
     "password": "SecurePassword123!",
-    "paypal": "new_paypal@paypal.com",
+    "paymentInfo": [
+      { "type": "paypal", "account_details": { "username": "new_paypal@paypal.com" } }
+    ],
     "reddit": "new_reddit_username"
   }
   ```
@@ -182,6 +187,7 @@ Creates a basic user account and hashes the password securely.
       "id": "9b122e92-3bc8-439d-b82b-10c22c8ee12a",
       "email": "newuser@redditcrm.com",
       "paypal": "new_paypal@paypal.com",
+      "paymentInfo": [ { "id": "...", "type": "paypal", "account_details": { "username": "new_paypal@paypal.com" } } ],
       "reddit": "new_reddit_username",
       "created_at": "2026-07-09T00:00:00Z"
     }

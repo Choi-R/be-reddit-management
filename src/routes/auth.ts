@@ -27,7 +27,9 @@ auth.post(
 
     // 1. Retrieve the user by email with rank info
     const userResult = await pool.query(
-      `SELECT u.*, ar.rank_name, ar.cqm_level, ar.rank_level
+      `SELECT u.*, ar.rank_name, ar.cqm_level, ar.rank_level,
+              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info
        FROM users u
        LEFT JOIN account_ranks ar ON u.rank_id = ar.id
        WHERE u.email = $1`,
@@ -75,7 +77,8 @@ auth.post(
       user: {
         id: user.id,
         email: user.email,
-        paypal: user.paypal,
+        paypal: user.paypal || null,
+        paymentInfo: user.payment_info || [],
         reddit: user.reddit,
         nickname: user.nickname,
         role_id: user.role_id,

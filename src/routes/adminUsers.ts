@@ -55,11 +55,21 @@ adminUsers.post('/users', async (c) => {
     const securePassword = await createPasswordHash(password);
 
     const newUser = await pool.query(
-      `INSERT INTO users (email, password, paypal, reddit, nickname, role_id, rank_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 'basic', $6, NOW(), NOW())
-       RETURNING id, email, paypal, reddit, nickname, role_id, rank_id, created_at`,
-      [email, securePassword, paypal || null, cleanReddit, nickname || null, targetRankId]
+      `INSERT INTO users (email, password, reddit, nickname, role_id, rank_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'basic', $5, NOW(), NOW())
+       RETURNING id, email, reddit, nickname, role_id, rank_id, created_at`,
+      [email, securePassword, cleanReddit, nickname || null, targetRankId]
     );
+
+    const createdUser = newUser.rows[0];
+    // If legacy paypal provided, store in payment_info
+    if (paypal) {
+      await pool.query(
+        `INSERT INTO payment_info (user_id, type, account_details, created_at, updated_at)
+         VALUES ($1, 'paypal', $2::jsonb, NOW(), NOW())`,
+        [createdUser.id, JSON.stringify({ username: paypal })]
+      );
+    }
 
     try {
       await sendNewUserNotificationEmail(email, cleanReddit, c.env);
@@ -67,7 +77,17 @@ adminUsers.post('/users', async (c) => {
       console.error('Failed to send registration email notification:', emailError);
     }
 
-    return c.json({ success: true, user: newUser.rows[0] });
+    // Return created user including payment_info
+    const createdUserRes = await pool.query(
+      `SELECT u.id, u.email,
+              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
+              u.reddit, u.nickname, u.role_id, u.rank_id, u.created_at
+       FROM users u WHERE u.id = $1`,
+      [createdUser.id]
+    );
+
+    return c.json({ success: true, user: createdUserRes.rows[0] });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin create user error');
     return c.json(body, status);
@@ -85,7 +105,10 @@ adminUsers.get('/users', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     let queryText = `
-      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
+      SELECT u.id, u.email,
+             (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+             (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
+             u.reddit, u.nickname, u.role_id, u.rank_id,
              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
              COALESCE(
                (SELECT SUM(t.price) 
@@ -161,7 +184,8 @@ adminUsers.get('/users', async (c) => {
     const formattedUsers = usersList.rows.map((row: any) => ({
       id: row.id,
       email: row.email,
-      paypal: row.paypal,
+      paypal: row.paypal || null,
+      paymentInfo: row.payment_info || [],
       reddit: row.reddit,
       nickname: row.nickname,
       roleId: row.role_id,
@@ -203,7 +227,10 @@ adminUsers.get('/users/search', async (c) => {
     }
 
     let queryText = `
-      SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id, ar.rank_name, u.created_at
+      SELECT u.id, u.email,
+             (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+             (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
+             u.reddit, u.nickname, u.role_id, u.rank_id, ar.rank_name, u.created_at
       FROM users u
       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
       WHERE 1=1
@@ -225,7 +252,8 @@ adminUsers.get('/users/search', async (c) => {
     const formattedUsers = usersList.rows.map((row: any) => ({
       id: row.id,
       email: row.email,
-      paypal: row.paypal,
+      paypal: row.paypal || null,
+      paymentInfo: row.payment_info || [],
       reddit: row.reddit,
       nickname: row.nickname,
       rankId: row.rank_id || 'D',
@@ -247,7 +275,10 @@ adminUsers.get('/users/:id/detail', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const userRes = await pool.query(
-      `SELECT u.id, u.email, u.paypal, u.reddit, u.nickname, u.role_id, u.rank_id,
+      `SELECT u.id, u.email,
+              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
+              u.reddit, u.nickname, u.role_id, u.rank_id,
               ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at
        FROM users u
        LEFT JOIN account_ranks ar ON u.rank_id = ar.id
@@ -336,7 +367,8 @@ adminUsers.get('/users/:id/detail', async (c) => {
         user: {
           id: user.id,
           email: user.email,
-          paypal: user.paypal,
+          paypal: user.paypal || null,
+          paymentInfo: user.payment_info || [],
           reddit: user.reddit,
           nickname: user.nickname,
           roleId: user.role_id,
@@ -416,14 +448,47 @@ adminUsers.put('/users/:id', async (c) => {
     }
 
     const query = `UPDATE users 
-             SET email = $1, paypal = $2, reddit = $3, nickname = $4,
-                 rank_id = COALESCE($5, rank_id), updated_at = NOW() 
-             WHERE id = $6 
-             RETURNING id, email, paypal, reddit, nickname, role_id, rank_id, created_at`;
-    const params = [email, paypal || null, cleanReddit, nickname || null, targetRankId, id];
+             SET email = $1, reddit = $2, nickname = $3,
+                 rank_id = COALESCE($4, rank_id), updated_at = NOW() 
+             WHERE id = $5 
+             RETURNING id, email, reddit, nickname, role_id, rank_id, created_at`;
+    const params = [email, cleanReddit, nickname || null, targetRankId, id];
 
     const result = await pool.query(query, params);
-    return c.json({ success: true, user: result.rows[0] });
+
+    // Handle payment info updates
+    if (Array.isArray(body.paymentInfo)) {
+      // Replace all existing payment_info rows for this user with provided entries
+      await pool.query('DELETE FROM payment_info WHERE user_id = $1', [id]);
+      for (const entry of body.paymentInfo) {
+        if (!entry || !entry.type || !entry.account_details) continue;
+        await pool.query(
+          `INSERT INTO payment_info (user_id, type, account_details, created_at, updated_at)
+           VALUES ($1, $2::payment_type, $3::jsonb, NOW(), NOW())`,
+          [id, entry.type, JSON.stringify(entry.account_details)]
+        );
+      }
+    } else if (paypal) {
+      // Legacy single paypal field: upsert into payment_info
+      await pool.query(`DELETE FROM payment_info WHERE user_id = $1 AND type = 'paypal'`, [id]);
+      await pool.query(
+        `INSERT INTO payment_info (user_id, type, account_details, created_at, updated_at)
+         VALUES ($1, 'paypal', $2::jsonb, NOW(), NOW())`,
+        [id, JSON.stringify({ username: paypal })]
+      );
+    }
+
+    // Return updated user including payment_info
+    const updatedUserRes = await pool.query(
+      `SELECT u.id, u.email,
+              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
+              u.reddit, u.nickname, u.role_id, u.rank_id, u.created_at
+       FROM users u WHERE u.id = $1`,
+      [id]
+    );
+
+    return c.json({ success: true, user: updatedUserRes.rows[0] });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin update user profile error');
     return c.json(body, status);

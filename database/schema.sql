@@ -42,7 +42,6 @@ CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL, -- Format: salt:sha256_hash
-    paypal TEXT,
     reddit TEXT NOT NULL,
     nickname TEXT,
     role_id TEXT REFERENCES roles(id) DEFAULT 'basic' NOT NULL,
@@ -145,16 +144,21 @@ INSERT INTO task_status (id, status_name) VALUES
 -- Salt: seedsalt1234
 -- Salted Hash (SHA-256 of "AdminCRM2026!seedsalt1234"): 4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
 -- Final password entry format: seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82
-INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
-('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82', 'admin@paypal.com', 'reddit_admin', 'admin');
+INSERT INTO users (id, email, password, reddit, role_id) VALUES
+('a0e86950-8b1e-450f-a7b3-241517454f00', 'admin@redditcrm.com', 'seedsalt1234:4e70ac59642235767de4e7d27a8ebedec466d9ad9b40cf0acbdc746e44939d82', 'reddit_admin', 'admin');
 
 -- Seed: Rahmaditya Admin User (Password Raw: rahmadityac@gmail.com)
-INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
-('b1e86950-8b1e-450f-a7b3-241517454f01', 'rahmadityac@gmail.com', 'seedsalt1234:a7c0e615071295699d004477d022eed1dbb9bfcb70ada633e3867b2905d23d69', NULL, 'reddit_rahmadityac', 'admin');
+INSERT INTO users (id, email, password, reddit, role_id) VALUES
+('b1e86950-8b1e-450f-a7b3-241517454f01', 'rahmadityac@gmail.com', 'seedsalt1234:a7c0e615071295699d004477d022eed1dbb9bfcb70ada633e3867b2905d23d69', 'reddit_rahmadityac', 'admin');
 
 -- Seed: Kellirun Admin User (Password Raw: kb.kellirun@gmail.com)
-INSERT INTO users (id, email, password, paypal, reddit, role_id) VALUES
-('c1e86950-8b1e-450f-a7b3-241517454f02', 'kb.kellirun@gmail.com', 'seedsalt1234:a3c4eb604947b1910a9a501ce3ab02df71b885126fa38046c96cca5f42484af9', NULL, 'reddit_kb_kellirun', 'admin');
+INSERT INTO users (id, email, password, reddit, role_id) VALUES
+('c1e86950-8b1e-450f-a7b3-241517454f02', 'kb.kellirun@gmail.com', 'seedsalt1234:a3c4eb604947b1910a9a501ce3ab02df71b885126fa38046c96cca5f42484af9', 'reddit_kb_kellirun', 'admin');
+
+-- Seed migrated payment_info for default admin
+CREATE TYPE IF NOT EXISTS payment_type AS ENUM ('paypal', 'bank', 'crypto');
+INSERT INTO payment_info (user_id, type, account_details)
+VALUES ('a0e86950-8b1e-450f-a7b3-241517454f00', 'paypal', jsonb_build_object('username', 'admin@paypal.com'));
 
 -- -------------------------------------------------------------
 -- 6. Password Reset Tokens Table

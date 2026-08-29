@@ -70,6 +70,38 @@ UPDATE users SET role_id = 'basic' WHERE role_id IS NULL;
 ALTER TABLE users ALTER COLUMN role_id SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);
 DROP TABLE IF EXISTS user_roles;
+-- -------------------------------------------------------------
+-- Payment info: new type and table + migrate existing paypal data
+-- -------------------------------------------------------------
+ALTER TABLE users DROP COLUMN IF EXISTS paypal;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_type') THEN
+    CREATE TYPE payment_type AS ENUM ('paypal', 'bank', 'crypto');
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS payment_info (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type payment_type NOT NULL,
+  account_details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Migrate any legacy paypal values from seeds if they still exist (safe no-op otherwise)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='paypal') THEN
+    INSERT INTO payment_info (user_id, type, account_details, created_at, updated_at)
+    SELECT id, 'paypal'::payment_type, jsonb_build_object('username', paypal), NOW(), NOW()
+    FROM users WHERE paypal IS NOT NULL;
+  END IF;
+EXCEPTION WHEN undefined_table THEN
+  -- no-op
+END$$;
 `;
 
 async function run() {
