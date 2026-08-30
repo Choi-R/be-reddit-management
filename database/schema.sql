@@ -99,6 +99,7 @@ CREATE TABLE producthunt_accounts (
     username TEXT NOT NULL,
     headline TEXT,
     bio TEXT,
+    about TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
@@ -112,6 +113,7 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECU
 CREATE TRIGGER update_task_status_updated_at BEFORE UPDATE ON task_status FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_producthunt_accounts_updated_at BEFORE UPDATE ON producthunt_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- -------------------------------------------------------------
 -- 4. Create Indexes for Scaling to 100+ Accounts

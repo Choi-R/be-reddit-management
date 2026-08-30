@@ -4,7 +4,7 @@ import { createPasswordHash } from '../utils/crypto';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
 import { sendNewUserNotificationEmail } from '../utils/email';
-import { validateEmail, validateStringField, extractRedditUsername } from '../utils/validation';
+import { validateEmail, validateStringField, extractRedditUsername, extractProductHuntUsername } from '../utils/validation';
 
 const adminUsers = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -571,7 +571,12 @@ adminUsers.post('/users/:userId/producthunt-accounts', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Username is required');
     }
 
-    const { username, headline, bio } = body;
+    const username = extractProductHuntUsername(body.username);
+    if (!username) {
+      throw new BusinessError('INVALID_INPUT', 'A valid Product Hunt username is required');
+    }
+
+    const { headline, bio, about } = body;
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
@@ -581,14 +586,15 @@ adminUsers.post('/users/:userId/producthunt-accounts', async (c) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO producthunt_accounts (user_id, username, headline, bio, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, NOW(), NOW())
+      `INSERT INTO producthunt_accounts (user_id, username, headline, bio, about, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
        RETURNING *`,
-      [userId, username, headline || null, bio || null]
+      [userId, username, headline || null, bio || null, about || null]
     );
 
     return c.json({ success: true, account: result.rows[0] });
   } catch (error: unknown) {
+    console.error('Admin create PH account error:', error);
     const { body, status } = handleRouteError(error, 'Admin create PH account error');
     return c.json(body, status);
   }
@@ -627,7 +633,12 @@ adminUsers.put('/users/:userId/producthunt-accounts/:phId', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Username is required');
     }
 
-    const { username, headline, bio } = body;
+    const username = extractProductHuntUsername(body.username);
+    if (!username) {
+      throw new BusinessError('INVALID_INPUT', 'A valid Product Hunt username is required');
+    }
+
+    const { headline, bio, about } = body;
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
@@ -641,14 +652,15 @@ adminUsers.put('/users/:userId/producthunt-accounts/:phId', async (c) => {
 
     const result = await pool.query(
       `UPDATE producthunt_accounts 
-       SET username = $1, headline = $2, bio = $3, updated_at = NOW()
-       WHERE id = $4 AND user_id = $5
+       SET username = $1, headline = $2, bio = $3, about = $4, updated_at = NOW()
+       WHERE id = $5 AND user_id = $6
        RETURNING *`,
-      [username, headline || null, bio || null, phId, userId]
+      [username, headline || null, bio || null, about || null, phId, userId]
     );
 
     return c.json({ success: true, account: result.rows[0] });
   } catch (error: unknown) {
+    console.error('Admin update PH account error:', error);
     const { body, status } = handleRouteError(error, 'Admin update PH account error');
     return c.json(body, status);
   }

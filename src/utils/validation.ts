@@ -42,3 +42,25 @@ export function extractRedditUsername(input: string): string {
 
   return cleaned.trim();
 }
+
+// Extract Product Hunt username from @username or https://www.producthunt.com/@username
+export function extractProductHuntUsername(input: string): string {
+  if (!input) return '';
+  let cleaned = input.trim();
+
+  // Strip protocol and host
+  cleaned = cleaned.replace(/^(https?:\/\/)?(www\.)?producthunt\.com\//i, '');
+
+  // Strip leading slash
+  cleaned = cleaned.replace(/^\//, '');
+
+  // Strip leading @ symbol for URL-formatted cases
+  if (cleaned.toLowerCase().startsWith('@')) {
+    cleaned = cleaned.substring(1);
+  }
+
+  // Take the first segment (strip trailing slashes/subpaths)
+  cleaned = cleaned.split('/')[0];
+
+  return cleaned.trim();
+}
