@@ -48,7 +48,7 @@ adminTasks.post('/tasks', async (c) => {
     let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
     if (platform === 'REDDIT' && url) {
-      const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+      const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
       if (match) {
         targetSubreddit = match[1];
       }
@@ -182,7 +182,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
       const taskPlatform = (platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
       let targetSubreddit: string | null = target_subreddit || subreddit || null;
       if (taskPlatform === 'REDDIT' && url) {
-        const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+        const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
         if (match) {
           targetSubreddit = match[1];
         }
@@ -362,7 +362,7 @@ adminTasks.put('/tasks/:id', async (c) => {
     let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
     if (platform === 'REDDIT' && url) {
-      const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+      const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
       if (match) {
         targetSubreddit = match[1];
       }
