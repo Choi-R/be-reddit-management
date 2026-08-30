@@ -17,15 +17,20 @@ cron.post('/cleanup', async (c) => {
 
     // Execute queries in a single transaction block for full database safety
     const cleanupSummary = await withTransaction(pool, async (client) => {
-      // CTE 1: Expiration of 60-Hour Bookings
+      // CTE 1: Expiration of Bookings (60h for D/C/B, 100h for A/S)
       // Deletes user_tasks matching criteria and restores the exact quota per task
       const expirationResult = await client.query(`
         WITH deleted_tasks AS (
             DELETE FROM user_tasks ut
-            USING tasks t
+            USING tasks t, users u, account_ranks ar
             WHERE ut.task_id = t.id
+              AND ut.user_id = u.id
+              AND u.rank_id = ar.id
               AND ut.status_id = 'incomplete'
-              AND ut.created_at < NOW() - INTERVAL '60 hours'
+              AND (
+                (ar.rank_level >= 4 AND ut.created_at < NOW() - INTERVAL '100 hours')
+                OR (ar.rank_level < 4 AND ut.created_at < NOW() - INTERVAL '60 hours')
+              )
               AND t.assigned_to IS NULL
             RETURNING ut.task_id
         ),
