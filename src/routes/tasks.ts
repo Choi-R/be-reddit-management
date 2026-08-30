@@ -98,8 +98,14 @@ tasks.get('/available', async (c) => {
     // - Task must not have expired (deadline is null or in the future)
     // - Task is either unassigned or assigned explicitly to the current user
     // - User has no booking history for this task
+    const platformFilter = c.req.query('platform') || '';
+    const platformWhere = platformFilter && ['REDDIT', 'PRODUCTHUNT'].includes(platformFilter.toUpperCase())
+      ? `AND t.platform = $${paramIdx++}`
+      : '';
+    const platformParam = platformFilter.toUpperCase();
+
     const availableTasks = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
+      `SELECT t.id, t.platform, t.target_subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level
        FROM tasks t
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -113,8 +119,9 @@ tasks.get('/available', async (c) => {
            SELECT 1 FROM user_tasks ut 
            WHERE ut.task_id = t.id AND ut.user_id = $1
          )
+         ${platformWhere}
        ORDER BY t.created_at DESC`,
-      [user.id]
+      platformParam ? [user.id, platformParam] : [user.id]
     );
 
     // Fetch active tasks to help frontend manage states (e.g. show booking warning)

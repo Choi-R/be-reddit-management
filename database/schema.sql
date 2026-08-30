@@ -61,7 +61,8 @@ CREATE TABLE task_status (
 -- Table: tasks
 CREATE TABLE tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    subreddit TEXT,
+    platform TEXT NOT NULL DEFAULT 'REDDIT' CHECK (platform IN ('REDDIT', 'PRODUCTHUNT')),
+    target_subreddit TEXT,
     url TEXT NOT NULL,
     client_request TEXT NOT NULL,
     quota INTEGER CHECK (quota >= 0) NOT NULL,
@@ -89,6 +90,17 @@ CREATE TABLE user_tasks (
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     UNIQUE(user_id, task_id) -- User cannot perform the same task more than once
+);
+
+-- Table: producthunt_accounts
+CREATE TABLE producthunt_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    username TEXT NOT NULL,
+    headline TEXT,
+    bio TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 -- -------------------------------------------------------------

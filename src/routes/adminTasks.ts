@@ -44,19 +44,20 @@ adminTasks.post('/tasks', async (c) => {
 
     const { url, clientRequest, quota, assignedTo, price, deadline, minRankId, min_rank_id } = body;
     const targetMinRankId = minRankId || min_rank_id || null;
-    let subreddit = body.subreddit || null;
+    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+    let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
-    if (url) {
+    if (platform === 'REDDIT' && url) {
       const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
       if (match) {
-        subreddit = match[1];
+        targetSubreddit = match[1];
       }
     }
 
-    if (subreddit) {
-      validateStringField(subreddit, 'Subreddit', 200);
+    if (targetSubreddit) {
+      validateStringField(targetSubreddit, 'Target subreddit', 200);
     }
-    validateStringField(url, 'Reddit URL', 2000);
+    validateStringField(url, 'URL', 2000);
     validateStringField(clientRequest, 'Client request', 5000);
     if (targetMinRankId) {
       validateStringField(targetMinRankId, 'Minimum Rank ID', 50);
@@ -72,7 +73,7 @@ adminTasks.post('/tasks', async (c) => {
     try {
       new URL(url);
     } catch {
-      throw new BusinessError('INVALID_INPUT', 'Reddit URL must be a valid URL');
+      throw new BusinessError('INVALID_INPUT', 'URL must be a valid URL');
     }
 
     const pool = getDbPool(c.env.DATABASE_URL);
@@ -89,10 +90,10 @@ adminTasks.post('/tasks', async (c) => {
     const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
     const result = await pool.query(
-      `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, NOW(), NOW())
+      `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, NOW(), NOW())
        RETURNING *`,
-      [subreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, targetMinRankId]
+      [platform, targetSubreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, targetMinRankId]
     );
 
     return c.json({
@@ -126,7 +127,8 @@ adminTasks.post('/tasks/bulk', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const validatedTasks: Array<{
-      subreddit: string | null;
+      platform: 'REDDIT' | 'PRODUCTHUNT';
+      targetSubreddit: string | null;
       url: string;
       clientRequest: string;
       quota: number;
@@ -142,18 +144,18 @@ adminTasks.post('/tasks/bulk', async (c) => {
         throw new BusinessError('INVALID_INPUT', `Task at row ${rowNum} is not a valid object`);
       }
 
-      const { url, clientRequest, deadline, price, minRankId, min_rank_id, minRank } = t;
+      const { url, clientRequest, deadline, price, minRankId, min_rank_id, minRank, platform, target_subreddit, subreddit } = t;
 
       if (typeof url !== 'string' || url.trim().length === 0) {
-        throw new BusinessError('MISSING_FIELD', `Row ${rowNum}: Reddit URL is required`);
+        throw new BusinessError('MISSING_FIELD', `Row ${rowNum}: URL is required`);
       }
       if (url.length > 2000) {
-        throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: Reddit URL is too long (max 2000 characters)`);
+        throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: URL is too long (max 2000 characters)`);
       }
       try {
         new URL(url);
       } catch {
-        throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: Reddit URL must be a valid URL`);
+        throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: URL must be a valid URL`);
       }
 
       if (typeof clientRequest !== 'string' || clientRequest.trim().length === 0) {
@@ -177,12 +179,15 @@ adminTasks.post('/tasks/bulk', async (c) => {
         parsedDeadline = d.toISOString();
       }
 
-      let subreddit: string | null = null;
-      const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
-      if (match) {
-        subreddit = match[1];
+      const taskPlatform = (platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+      let targetSubreddit: string | null = target_subreddit || subreddit || null;
+      if (taskPlatform === 'REDDIT' && url) {
+        const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
+        if (match) {
+          targetSubreddit = match[1];
+        }
       }
-      if (subreddit && subreddit.length > 200) {
+      if (targetSubreddit && targetSubreddit.length > 200) {
         throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: Subreddit name is too long (max 200 characters)`);
       }
 
@@ -192,7 +197,8 @@ adminTasks.post('/tasks/bulk', async (c) => {
         : null;
 
       validatedTasks.push({
-        subreddit,
+        platform: taskPlatform,
+        targetSubreddit,
         url,
         clientRequest,
         quota: 1,
@@ -209,10 +215,10 @@ adminTasks.post('/tasks/bulk', async (c) => {
       const results = [];
       for (const t of validatedTasks) {
         const res = await client.query(
-          `INSERT INTO tasks (subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $4, NULL, $5, $6, $7, NOW(), NOW())
+          `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $4, NULL, $5, $6, $7, $8, NOW(), NOW())
            RETURNING *`,
-          [t.subreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.minRankId]
+          [t.platform, t.targetSubreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.minRankId]
         );
         results.push(res.rows[0]);
       }
@@ -252,7 +258,7 @@ adminTasks.get('/tasks', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const tasksList = await pool.query(
-      `SELECT t.id, t.subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
+      `SELECT t.id, t.platform, t.target_subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level,
               t.deleted_at, t.is_archived, t.created_at, t.updated_at,
               u.email as assigned_to_email,
@@ -352,19 +358,20 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     const { url, clientRequest, quota, originalQuota, assignedTo, price, deadline, minRankId, min_rank_id, restore, isArchived, is_archived } = body;
     const targetMinRankId = minRankId || min_rank_id || null;
-    let subreddit = body.subreddit || null;
+    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+    let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
-    if (url) {
+    if (platform === 'REDDIT' && url) {
       const match = url.match(/\/r\/([a-zA-Z0-9_]+)/i);
       if (match) {
-        subreddit = match[1];
+        targetSubreddit = match[1];
       }
     }
 
-    if (subreddit) {
-      validateStringField(subreddit, 'Subreddit', 200);
+    if (targetSubreddit) {
+      validateStringField(targetSubreddit, 'Target subreddit', 200);
     }
-    validateStringField(url, 'Reddit URL', 2000);
+    validateStringField(url, 'URL', 2000);
     validateStringField(clientRequest, 'Client request', 5000);
     if (targetMinRankId) {
       validateStringField(targetMinRankId, 'Minimum Rank ID', 50);
@@ -380,7 +387,7 @@ adminTasks.put('/tasks/:id', async (c) => {
     try {
       new URL(url);
     } catch {
-      throw new BusinessError('INVALID_INPUT', 'Reddit URL must be a valid URL');
+      throw new BusinessError('INVALID_INPUT', 'URL must be a valid URL');
     }
 
     const pool = getDbPool(c.env.DATABASE_URL);
@@ -419,26 +426,27 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     const result = await pool.query(
       `UPDATE tasks 
-       SET subreddit = $1, 
-           url = $2, 
-           client_request = $3, 
-           quota = GREATEST(0, $4 - (
+       SET platform = $1,
+           target_subreddit = $2, 
+           url = $3, 
+           client_request = $4, 
+           quota = GREATEST(0, $5 - (
              SELECT COUNT(*)::int 
              FROM user_tasks 
              WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid')
            )), 
            original_quota = GREATEST(
-             $4, 
+             $5, 
              (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid'))
            ),
-           assigned_to = $5, 
-           price = $6, 
-           deadline = $7, 
-           min_rank_id = $8, 
+           assigned_to = $6, 
+           price = $7, 
+           deadline = $8, 
+           min_rank_id = $9, 
            updated_at = NOW() ${restoreSql}
-       WHERE id = $9 
+       WHERE id = $10 
        RETURNING *`,
-      [subreddit || null, url, clientRequest, targetTotalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
+      [platform, targetSubreddit || null, url, clientRequest, targetTotalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
     );
 
     if (result.rows.length === 0) {
@@ -602,7 +610,7 @@ adminTasks.get('/tasks/history', async (c) => {
 
     if (search) {
       whereClauses.push(
-        `(u.email ILIKE $${paramIdx} OR u.reddit ILIKE $${paramIdx} OR u.nickname ILIKE $${paramIdx} OR t.subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx})`
+        `(u.email ILIKE $${paramIdx} OR u.reddit ILIKE $${paramIdx} OR u.nickname ILIKE $${paramIdx} OR t.target_subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx})`
       );
       queryParams.push(`%${search}%`);
       paramIdx++;
@@ -614,7 +622,7 @@ adminTasks.get('/tasks/history', async (c) => {
       SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note,
              ut.created_at, ut.updated_at,
              u.id as user_id, u.email as user_email, u.reddit as user_reddit, u.nickname as user_nickname,
-             t.id as task_id, t.subreddit, t.url as task_url, t.client_request, t.price, t.deadline
+             t.id as task_id, t.platform, t.target_subreddit, t.url as task_url, t.client_request, t.price, t.deadline
       FROM user_tasks ut
       JOIN users u ON ut.user_id = u.id
       JOIN tasks t ON ut.task_id = t.id

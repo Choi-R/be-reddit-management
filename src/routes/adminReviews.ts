@@ -28,7 +28,7 @@ adminReviews.post('/tasks/review', async (c) => {
 
     const { updatedBooking, quotaReturned, userReddit, subreddit } = await withTransaction(pool, async (client) => {
       const bookingCheck = await client.query(
-        `SELECT ut.task_id, u.reddit as user_reddit, t.subreddit
+        `SELECT ut.task_id, u.reddit as user_reddit, t.platform, t.target_subreddit
          FROM user_tasks ut
          JOIN users u ON ut.user_id = u.id
          JOIN tasks t ON ut.task_id = t.id
@@ -42,7 +42,8 @@ adminReviews.post('/tasks/review', async (c) => {
 
       const taskId = bookingCheck.rows[0].task_id;
       const userReddit = bookingCheck.rows[0].user_reddit;
-      const subreddit = bookingCheck.rows[0].subreddit;
+      const subreddit = bookingCheck.rows[0].target_subreddit;
+      const platform = bookingCheck.rows[0].platform;
 
       const updateResult = await client.query(
         `UPDATE user_tasks 
@@ -77,7 +78,7 @@ adminReviews.post('/tasks/review', async (c) => {
 
     if (statusId === 'success') {
       const redditUser = userReddit ? `u/${userReddit}` : 'a user';
-      const subredditText = subreddit ? ` in r/${subreddit}` : '';
+      const subredditText = platform === 'REDDIT' && subreddit ? ` in r/${subreddit}` : '';
       const frontendUrl = c.env.FRONTEND_URL || c.env.VITE_FRONTEND_URL || 'https://reddit-management.choi.web.id';
 
       const message = `A task submission by <b>${redditUser}</b>${subredditText} was approved! 🎉\n\n<a href="${frontendUrl}">Log in to claim available tasks</a>`;
@@ -101,7 +102,7 @@ adminReviews.get('/reviews/pending', async (c) => {
     const result = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.created_at, ut.updated_at,
               u.email as user_email, u.reddit as user_reddit,
-              t.id as task_id, t.subreddit, t.price
+              t.id as task_id, t.platform, t.target_subreddit, t.price
        FROM user_tasks ut
        JOIN users u ON ut.user_id = u.id
        JOIN tasks t ON ut.task_id = t.id

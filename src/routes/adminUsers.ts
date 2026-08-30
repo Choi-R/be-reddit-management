@@ -279,7 +279,9 @@ adminUsers.get('/users/:id/detail', async (c) => {
               (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
               u.reddit, u.nickname, u.role_id, u.rank_id,
-              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at
+              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', ph.id, 'user_id', ph.user_id, 'username', ph.username, 'headline', ph.headline, 'bio', ph.bio, 'created_at', ph.created_at, 'updated_at', ph.updated_at)) FILTER (WHERE ph.id IS NOT NULL), '[]'::jsonb)
+               FROM producthunt_accounts ph WHERE ph.user_id = u.id) as producthunt_accounts
        FROM users u
        LEFT JOIN account_ranks ar ON u.rank_id = ar.id
        WHERE u.id = $1`,
@@ -329,7 +331,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
 
     const activeBookingsRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
+              t.platform, t.target_subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -340,7 +342,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
 
     const pendingSubmissionsRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
+              t.platform, t.target_subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -351,7 +353,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
 
     const taskHistoryRes = await pool.query(
       `SELECT ut.id as booking_id, ut.task_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
-              t.subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
+              t.platform, t.target_subreddit, t.url, t.client_request, t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -556,6 +558,122 @@ adminUsers.delete('/users/:id', async (c) => {
     return c.json({ success: true, message: 'User deleted successfully' });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin delete user error');
+    return c.json(body, status);
+  }
+});
+
+// 7. Create a ProductHunt account for a user
+adminUsers.post('/users/:userId/producthunt-accounts', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.username) {
+      throw new BusinessError('MISSING_FIELD', 'Username is required');
+    }
+
+    const { username, headline, bio } = body;
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const result = await pool.query(
+      `INSERT INTO producthunt_accounts (user_id, username, headline, bio, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       RETURNING *`,
+      [userId, username, headline || null, bio || null]
+    );
+
+    return c.json({ success: true, account: result.rows[0] });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin create PH account error');
+    return c.json(body, status);
+  }
+});
+
+// 8. List ProductHunt accounts for a user
+adminUsers.get('/users/:userId/producthunt-accounts', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM producthunt_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    return c.json({ success: true, accounts: result.rows });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin list PH accounts error');
+    return c.json(body, status);
+  }
+});
+
+// 9. Update a ProductHunt account
+adminUsers.put('/users/:userId/producthunt-accounts/:phId', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const phId = c.req.param('phId');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.username) {
+      throw new BusinessError('MISSING_FIELD', 'Username is required');
+    }
+
+    const { username, headline, bio } = body;
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const accountCheck = await pool.query(
+      'SELECT 1 FROM producthunt_accounts WHERE id = $1 AND user_id = $2',
+      [phId, userId]
+    );
+    if (accountCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'ProductHunt account not found');
+    }
+
+    const result = await pool.query(
+      `UPDATE producthunt_accounts 
+       SET username = $1, headline = $2, bio = $3, updated_at = NOW()
+       WHERE id = $4 AND user_id = $5
+       RETURNING *`,
+      [username, headline || null, bio || null, phId, userId]
+    );
+
+    return c.json({ success: true, account: result.rows[0] });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin update PH account error');
+    return c.json(body, status);
+  }
+});
+
+// 10. Delete a ProductHunt account
+adminUsers.delete('/users/:userId/producthunt-accounts/:phId', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const phId = c.req.param('phId');
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const accountCheck = await pool.query(
+      'SELECT 1 FROM producthunt_accounts WHERE id = $1 AND user_id = $2',
+      [phId, userId]
+    );
+    if (accountCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'ProductHunt account not found');
+    }
+
+    await pool.query('DELETE FROM producthunt_accounts WHERE id = $1 AND user_id = $2', [phId, userId]);
+
+    return c.json({ success: true, message: 'ProductHunt account deleted successfully' });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin delete PH account error');
     return c.json(body, status);
   }
 });
