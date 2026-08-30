@@ -28,9 +28,21 @@ interface CooldownResult {
 async function getUserCooldownStatus(
   userId: string,
   executor: { query: (sql: string, params: any[]) => Promise<any> },
-  isAdmin: boolean
+  isAdmin: boolean,
+  userRankLevel: number
 ): Promise<CooldownResult> {
   if (isAdmin) {
+    return {
+      isActive: false,
+      cooldownUntil: null,
+      remainingMs: 0,
+      lastSubmittedAt: null,
+      reason: null,
+    };
+  }
+
+  // Rank A (4) and Rank S (5) are exempt from cooldown
+  if (userRankLevel >= 4) {
     return {
       isActive: false,
       cooldownUntil: null,
@@ -61,7 +73,7 @@ async function getUserCooldownStatus(
   }
 
   const lastSubmittedAt = new Date(result.rows[0].submit_time);
-  const cooldownMs = 2 * 24 * 60 * 60 * 1000; // 48 hours
+  const cooldownMs = 1 * 24 * 60 * 60 * 1000; // 24 hours
   const cooldownUntil = new Date(lastSubmittedAt.getTime() + cooldownMs);
   const now = new Date();
 
@@ -73,7 +85,7 @@ async function getUserCooldownStatus(
       cooldownUntil: cooldownUntil.toISOString(),
       remainingMs,
       lastSubmittedAt: lastSubmittedAt.toISOString(),
-      reason: `A 2-day cooldown period is active following your recent task submission. Next booking available in approximately ${remainingHours} hours.`,
+      reason: `A 1-day cooldown period is active following your recent task submission. Next booking available in approximately ${remainingHours} hours.`,
     };
   }
 
@@ -135,7 +147,8 @@ tasks.get('/available', async (c) => {
       [user.id]
     );
 
-    const cooldown = await getUserCooldownStatus(user.id, pool, isAdmin);
+    const userRankLevel = user.account_rank?.rank_level ?? 1;
+    const cooldown = await getUserCooldownStatus(user.id, pool, isAdmin, userRankLevel);
 
     return c.json({
       available: availableTasks.rows,
@@ -197,13 +210,13 @@ tasks.post('/book', writeLimiter, async (c) => {
       const isAdmin = user.roles.includes('admin') || user.roles.includes('choi');
       const bookingLimit = isAdmin ? 99 : 1;
 
-      // A2.5. Check 2-day post-submission cooldown restriction
-      const cooldown = await getUserCooldownStatus(user.id, client, isAdmin);
+      // A2.5. Check post-submission cooldown restriction
+      const cooldown = await getUserCooldownStatus(user.id, client, isAdmin, userRankLevel);
       if (cooldown.isActive) {
         const remainingHours = Math.ceil(cooldown.remainingMs / (1000 * 60 * 60));
         throw new BusinessError(
           'COOLDOWN_ACTIVE',
-          `You cannot book a task right now. A 2-day cooldown period is active following your task submission on ${new Date(cooldown.lastSubmittedAt!).toLocaleString()}. Available in approx ${remainingHours} hours.`
+          `You cannot book a task right now. A 1-day cooldown period is active following your task submission on ${new Date(cooldown.lastSubmittedAt!).toLocaleString()}. Available in approx ${remainingHours} hours.`
         );
       }
 
