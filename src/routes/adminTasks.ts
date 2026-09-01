@@ -413,12 +413,10 @@ adminTasks.put('/tasks/:id', async (c) => {
       ? originalQuota 
       : (typeof quota === 'number' && quota > 0 ? quota : 1);
 
-    let telegramResult = { notified: false, reason: 'Task updated without restoring' };
     let restoreSql = '';
 
     if (restore) {
       restoreSql = `, is_archived = FALSE, deadline = CASE WHEN deadline IS NOT NULL AND deadline <= NOW() THEN NULL ELSE deadline END`;
-      telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
     } else if (isArchived !== undefined || is_archived !== undefined) {
       const targetArchived = isArchived !== undefined ? Boolean(isArchived) : Boolean(is_archived);
       restoreSql = `, is_archived = ${targetArchived ? 'TRUE' : 'FALSE'}`;
@@ -455,9 +453,7 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     return c.json({
       success: true,
-      task: result.rows[0],
-      telegramNotified: telegramResult.notified,
-      telegramReason: telegramResult.reason
+      task: result.rows[0]
     });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin update task error');
@@ -512,9 +508,6 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
       throw new BusinessError('CANNOT_RESTORE', 'Deleted tasks cannot be restored.');
     }
 
-    // Check Telegram notification cooldown (12h since latest task) BEFORE restoring task
-    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
-
     // Unarchive: set is_archived = FALSE, ensure quota >= 1, clear passed deadline
     const result = await pool.query(
       `UPDATE tasks 
@@ -541,9 +534,7 @@ adminTasks.post('/tasks/:id/restore', async (c) => {
     return c.json({
       success: true,
       message: 'Task restored to Active status successfully',
-      task: result.rows[0],
-      telegramNotified: telegramResult.notified,
-      telegramReason: telegramResult.reason
+      task: result.rows[0]
     });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin restore task error');
