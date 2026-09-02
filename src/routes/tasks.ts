@@ -412,18 +412,33 @@ tasks.post('/submit', writeLimiter, async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // 1. Fetch task details to check subreddit restriction
+    // 1. Fetch task details to check platform and subreddit restriction
     const taskResult = await pool.query(
-      'SELECT subreddit FROM tasks WHERE id = $1',
+      'SELECT platform, subreddit FROM tasks WHERE id = $1',
       [taskId]
     );
 
     if (taskResult.rows.length === 0) {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
+    const taskPlatform = taskResult.rows[0].platform || 'REDDIT';
     const taskSubreddit = taskResult.rows[0].subreddit;
 
-    // 2. Validate subreddit matching if restricted by the task
+    // 2. Validate URL domain based on platform
+    const host = parsedUrl.hostname.toLowerCase();
+    if (taskPlatform === 'PRODUCTHUNT') {
+      const isProductHuntHost = host === 'producthunt.com' || host.endsWith('.producthunt.com');
+      if (!isProductHuntHost) {
+        throw new BusinessError('INVALID_INPUT', 'Reply URL must be a producthunt.com domain link');
+      }
+    } else {
+      const isRedditHost = host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it';
+      if (!isRedditHost) {
+        throw new BusinessError('INVALID_INPUT', 'Reply URL must be a reddit.com domain link');
+      }
+    }
+
+    // 3. Validate subreddit matching if restricted by the task
     if (taskSubreddit) {
       const pathParts = parsedUrl.pathname.split('/');
       const rIdx = pathParts.findIndex(part => part.toLowerCase() === 'r');
@@ -435,14 +450,14 @@ tasks.post('/submit', writeLimiter, async (c) => {
       }
     }
 
-    // 3. Atomically verify duplicate URL and submit task inside a transaction
+    // 4. Atomically verify duplicate URL and submit task inside a transaction
     const booking = await withTransaction(pool, async (client) => {
       const duplicateCheck = await client.query(
         'SELECT 1 FROM user_tasks WHERE reply_url = $1 LIMIT 1',
         [replyUrl]
       );
       if (duplicateCheck.rows.length > 0) {
-        throw new BusinessError('DUPLICATE_SUBMISSION', 'This Reddit URL has already been submitted for a task.');
+        throw new BusinessError('DUPLICATE_SUBMISSION', 'This URL has already been submitted for a task.');
       }
 
       const result = await client.query(
