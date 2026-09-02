@@ -396,12 +396,6 @@ tasks.post('/submit', writeLimiter, async (c) => {
       throw new BusinessError('INVALID_INPUT', 'Reply URL must use HTTP or HTTPS protocol');
     }
 
-    const host = parsedUrl.hostname.toLowerCase();
-    const isRedditHost = host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it';
-    if (!isRedditHost) {
-      throw new BusinessError('INVALID_INPUT', 'Reply URL must be a reddit.com domain link');
-    }
-
     // Validate field lengths
     if (typeof replyUrl !== 'string' || replyUrl.length > 2000) {
       throw new BusinessError('INVALID_INPUT', 'Reply URL is too long (max 2000 characters)');
