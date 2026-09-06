@@ -26,7 +26,7 @@ adminReviews.post('/tasks/review', async (c) => {
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    const { updatedBooking, quotaReturned, userReddit, subreddit } = await withTransaction(pool, async (client) => {
+    const { updatedBooking, quotaReturned, userReddit, subreddit, platform } = await withTransaction(pool, async (client) => {
       const bookingCheck = await client.query(
         `SELECT ut.task_id, u.reddit as user_reddit, t.platform, t.target_subreddit
          FROM user_tasks ut
@@ -74,22 +74,30 @@ adminReviews.post('/tasks/review', async (c) => {
         quotaReturned: returnedQuota,
         userReddit,
         subreddit,
+        platform,
       };
     });
 
+    // Telegram notification is a non-critical side-effect; do not fail the request if it errors
     let telegramNotified = false;
     let telegramReason = '';
 
     if (statusId === 'success') {
       const redditUser = userReddit ? `u/${userReddit}` : 'a user';
-      const subredditText = platform === 'REDDIT' && subreddit ? ` in r/${subreddit}` : '';
+      const effectivePlatform = platform || 'REDDIT';
+      const subredditText = effectivePlatform === 'REDDIT' && subreddit ? ` in r/${subreddit}` : '';
       const frontendUrl = c.env.FRONTEND_URL || c.env.VITE_FRONTEND_URL || 'https://reddit-management.choi.web.id';
 
       const message = `A task submission by <b>${redditUser}</b>${subredditText} was approved! 🎉\n\n<a href="${frontendUrl}">Log in to claim available tasks</a>`;
 
-      const sendResult = await sendTelegramNotification(c.env, message);
-      telegramNotified = sendResult.success;
-      telegramReason = sendResult.reason;
+      try {
+        const sendResult = await sendTelegramNotification(c.env, message);
+        telegramNotified = sendResult.success;
+        telegramReason = sendResult.reason;
+      } catch (telegramError) {
+        console.error('[AdminReview] Telegram notification failed:', telegramError);
+        telegramReason = 'Notification dispatch failed silently';
+      }
     }
 
     return c.json({ success: true, booking: updatedBooking, quotaReturned, telegramNotified, telegramReason });
