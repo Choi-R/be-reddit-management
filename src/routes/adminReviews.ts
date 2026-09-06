@@ -53,6 +53,10 @@ adminReviews.post('/tasks/review', async (c) => {
         [statusId, effectiveAdminNote || null, bookingId]
       );
 
+      if (updateResult.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'Task was already reviewed or not found. Please refresh the page.');
+      }
+
       let returnedQuota = false;
       if (statusId === 'failed') {
         const updateQuotaResult = await client.query(
