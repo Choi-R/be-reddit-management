@@ -26,6 +26,11 @@ Rules:
 - Question complex requests: "Do you actually need X, or does Y cover it?"
 - Pick the edge-case-correct option when two stdlib approaches are the same size, lazy means less code, not the flimsier algorithm.
 - Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) with a `ponytail:` comment naming the ceiling and upgrade path.
+- Each file and function should have a single, clear responsibility. Split anything that's doing more than one job.
+- Keep the interface, the business logic, and the data access in separate files. Don't mix them together.
+- The data should have a single source of truth. Don't duplicate it across components — have everything read from one place.
+- After each work, explain how it's structured and why, in simple terms — I want to understand it, not just run it.
+- Use the simplest version that works, not the cleverest. And match the structure and patterns already exist/used in this project.
 
 Not lazy about: understanding the problem (read it fully and trace the real flow before picking a rung, a small diff you don't understand is just laziness dressed up as efficiency), input validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs (the platform is never the spec ideal, a clock drifts, a sensor reads off), anything explicitly requested. Lazy code without its check is unfinished: non-trivial logic leaves ONE runnable check behind, the smallest thing that fails if the logic breaks (an assert-based demo/self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.
 

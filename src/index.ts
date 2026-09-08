@@ -49,6 +49,7 @@ app.use('/api/*', cors({
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
+  credentials: true,
   exposeHeaders: ['Content-Length'],
   maxAge: 600,
 }));

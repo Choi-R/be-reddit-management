@@ -3,10 +3,34 @@ import { sign } from 'hono/jwt';
 import { getDbPool, withTransaction } from '../db/connection';
 import { verifyPassword, createPasswordHash } from '../utils/crypto';
 import { sendResetPasswordEmail } from '../utils/email';
-import { Env } from '../types';
+import { Env, Variables } from '../types';
 import { rateLimiter } from '../middleware/rateLimit';
+import { authMiddleware } from '../middleware/auth';
 
-const auth = new Hono<{ Bindings: Env }>();
+const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
+const SESSION_COOKIE = 'crm_session';
+const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400';
+const EXPIRED_SESSION_COOKIE = 'HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0';
+
+auth.get('/me', authMiddleware(), (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+
+  return c.json({
+    user: {
+      id: user.id,
+      email: user.email,
+      roles: user.roles,
+      rank_id: user.rank_id,
+      account_rank: user.account_rank,
+    },
+  });
+});
+
+auth.post('/logout', (c) => {
+  c.header('Set-Cookie', `${SESSION_COOKIE}=; ${EXPIRED_SESSION_COOKIE}`);
+  return c.json({ success: true });
+});
 
 auth.post(
   '/login',
@@ -72,8 +96,9 @@ auth.post(
     };
     const token = await sign(payload, c.env.JWT_SECRET);
 
+    c.header('Set-Cookie', `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}`);
+
     return c.json({
-      token,
       user: {
         id: user.id,
         email: user.email,

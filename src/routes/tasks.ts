@@ -111,10 +111,9 @@ tasks.get('/available', async (c) => {
     // - Task is either unassigned or assigned explicitly to the current user
     // - User has no booking history for this task
     const platformFilter = c.req.query('platform') || '';
-    const platformWhere = platformFilter && ['REDDIT', 'PRODUCTHUNT'].includes(platformFilter.toUpperCase())
-      ? `AND t.platform = $${paramIdx++}`
-      : '';
     const platformParam = platformFilter.toUpperCase();
+    const hasValidPlatformFilter = ['REDDIT', 'PRODUCTHUNT'].includes(platformParam);
+    const platformWhere = hasValidPlatformFilter ? 'AND t.platform = $2' : '';
 
     const availableTasks = await pool.query(
       `SELECT t.id, t.platform, t.target_subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
@@ -133,7 +132,7 @@ tasks.get('/available', async (c) => {
          )
          ${platformWhere}
        ORDER BY t.created_at DESC`,
-      platformParam ? [user.id, platformParam] : [user.id]
+      hasValidPlatformFilter ? [user.id, platformParam] : [user.id]
     );
 
     // Fetch active tasks to help frontend manage states (e.g. show booking warning)
