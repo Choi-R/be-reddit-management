@@ -407,7 +407,7 @@ tasks.post('/submit', writeLimiter, async (c) => {
 
     // 1. Fetch task details to check platform and subreddit restriction
     const taskResult = await pool.query(
-      'SELECT platform, subreddit FROM tasks WHERE id = $1',
+      'SELECT platform, target_subreddit FROM tasks WHERE id = $1',
       [taskId]
     );
 
@@ -415,7 +415,7 @@ tasks.post('/submit', writeLimiter, async (c) => {
       throw new BusinessError('NOT_FOUND', 'Task not found');
     }
     const taskPlatform = taskResult.rows[0].platform || 'REDDIT';
-    const taskSubreddit = taskResult.rows[0].subreddit;
+    const taskSubreddit = taskResult.rows[0].target_subreddit;
 
     // 2. Validate URL domain based on platform
     const host = parsedUrl.hostname.toLowerCase();
@@ -484,7 +484,7 @@ tasks.get('/earnings', async (c) => {
     // A. Fetch task list with payouts
     const history = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
-              t.id as task_id, t.subreddit, t.price, t.min_rank_id, ar.rank_name as min_rank_name
+              t.id as task_id, t.target_subreddit AS subreddit, t.price, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -552,7 +552,7 @@ tasks.get('/history', async (c) => {
 
     if (search) {
       whereClauses.push(
-        `(t.subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx} OR ut.note ILIKE $${paramIdx} OR ut.admin_note ILIKE $${paramIdx})`
+        `(t.target_subreddit ILIKE $${paramIdx} OR t.client_request ILIKE $${paramIdx} OR ut.reply_url ILIKE $${paramIdx} OR ut.note ILIKE $${paramIdx} OR ut.admin_note ILIKE $${paramIdx})`
       );
       queryParams.push(`%${search}%`);
       paramIdx++;
@@ -563,7 +563,7 @@ tasks.get('/history', async (c) => {
     const historyQuery = `
       SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note,
              ut.created_at, ut.updated_at,
-             t.id as task_id, t.subreddit, t.url as task_url, t.client_request, t.price, t.deadline,
+              t.id as task_id, t.target_subreddit AS subreddit, t.url as task_url, t.client_request, t.price, t.deadline,
              ar.rank_name as min_rank_name
       FROM user_tasks ut
       JOIN tasks t ON ut.task_id = t.id
