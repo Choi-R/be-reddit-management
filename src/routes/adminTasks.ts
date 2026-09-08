@@ -216,7 +216,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
       for (const t of validatedTasks) {
         const res = await client.query(
           `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $4, NULL, $5, $6, $7, $8, NOW(), NOW())
+           VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7, $8, NOW(), NOW())
            RETURNING *`,
           [t.platform, t.targetSubreddit, t.url, t.clientRequest, t.quota, t.price, t.deadline, t.minRankId]
         );
