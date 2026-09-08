@@ -22,9 +22,12 @@ Follow these steps to run the backend API server on your local machine:
 1. Log in to your [Neon Console](https://neon.tech/) and navigate to your project branch.
 2. Open the **SQL Editor** tab.
 3. Open [database/schema.sql](file:///d:/Portfolio/Reddit%20Management/be-reddit-management/database/schema.sql) in this workspace, copy the SQL commands, paste them into Neon's SQL Editor, and click **Run**.
-4. This creates all tables, triggers for automated `updated_at` values, indexes for 100+ accounts, and seeds lookup data alongside a default Admin user:
-   - **Email**: `admin@redditcrm.com`
-   - **Password**: `AdminCRM2026!`
+4. This creates all tables, triggers for automated `updated_at` values, indexes for 100+ accounts, and seeds lookup data. It does not create an administrator account.
+5. Create the first administrator with credentials supplied through environment variables:
+   ```bash
+   ADMIN_EMAIL=your-admin@example.com ADMIN_PASSWORD='use-a-unique-password' ADMIN_REDDIT=your_reddit_username node database/create_admin.js
+   ```
+   On PowerShell, set `$env:ADMIN_EMAIL`, `$env:ADMIN_PASSWORD`, and `$env:ADMIN_REDDIT` before running the script. The script refuses to overwrite an existing account.
 
 ### 2. Configure Environment Secrets
 1. In the [be-reddit-management](file:///d:/Portfolio/Reddit%20Management/be-reddit-management) folder, copy the template `.dev.vars.example` and name the copy **`.dev.vars`**.

@@ -10,6 +10,11 @@ let baseUrl = process.argv[2] || 'http://localhost:8787';
 if (baseUrl.endsWith('/')) {
   baseUrl = baseUrl.slice(0, -1);
 }
+const adminEmail = process.env.ADMIN_EMAIL;
+const adminPassword = process.env.ADMIN_PASSWORD;
+if (!adminEmail || !adminPassword) {
+  throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD before running the integration tests.');
+}
 console.log(`Starting E2E API Verification against: ${baseUrl}\n`);
 
 // Parse connection URL from .env for direct DB checks during tests
@@ -73,12 +78,12 @@ async function runTests() {
     // -------------------------------------------------------------
     // Step 1: Admin Login
     // -------------------------------------------------------------
-    console.log('Step 1: Authenticating as default Admin...');
+    console.log('Step 1: Authenticating as configured Admin...');
     const adminLoginRes = await apiRequest('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({
-        email: 'admin@redditcrm.com',
-        password: 'AdminCRM2026!',
+        email: adminEmail,
+        password: adminPassword,
       }),
     });
 
