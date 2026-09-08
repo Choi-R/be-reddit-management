@@ -206,26 +206,28 @@ auth.post(
 
     const pool = getDbPool(c.env.DATABASE_URL);
 
-    // 1. Retrieve valid token
-    const resetResult = await pool.query(
-      'SELECT email, expires_at FROM password_resets WHERE token = $1 AND expires_at > NOW()',
-      [token]
-    );
-
-    if (resetResult.rows.length === 0) {
-      return c.json({ error: 'The password reset link is invalid or has expired.' }, 400);
-    }
-
-    const { email } = resetResult.rows[0];
-
-    // 2. Generate a new password hash
+    // Generate the hash before opening the transaction so the token lock is held briefly.
     const hashedPassword = await createPasswordHash(password);
 
-    // 3. Update password and delete reset tokens inside an atomic transaction
-    await withTransaction(pool, async (client) => {
+    const resetSucceeded = await withTransaction(pool, async (client) => {
+      const resetResult = await client.query(
+        'SELECT email FROM password_resets WHERE token = $1 AND expires_at > NOW() FOR UPDATE',
+        [token]
+      );
+
+      if (resetResult.rows.length === 0) {
+        return false;
+      }
+
+      const { email } = resetResult.rows[0];
       await client.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
       await client.query('DELETE FROM password_resets WHERE email = $1', [email]);
+      return true;
     });
+
+    if (!resetSucceeded) {
+      return c.json({ error: 'The password reset link is invalid or has expired.' }, 400);
+    }
 
     return c.json({
       success: true,
