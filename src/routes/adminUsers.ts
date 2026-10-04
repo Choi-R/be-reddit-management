@@ -16,8 +16,9 @@ adminUsers.post('/users', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email, password, and reddit username are required');
     }
 
-    const { email, password, paypal, reddit, nickname, rankId, rank_id } = body;
+    const { email, password, paypal, reddit, nickname, rankId, rank_id, is_indonesian } = body;
     const targetRankId = rankId || rank_id || 'D';
+    const targetIsIndonesian = Boolean(is_indonesian ?? false);
 
     // Validate inputs
     validateEmail(email);
@@ -55,10 +56,10 @@ adminUsers.post('/users', async (c) => {
     const securePassword = await createPasswordHash(password);
 
     const newUser = await pool.query(
-      `INSERT INTO users (email, password, reddit, nickname, role_id, rank_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'basic', $5, NOW(), NOW())
-       RETURNING id, email, reddit, nickname, role_id, rank_id, created_at`,
-      [email, securePassword, cleanReddit, nickname || null, targetRankId]
+      `INSERT INTO users (email, password, reddit, nickname, role_id, rank_id, is_indonesian, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, 'basic', $5, $6, NOW(), NOW())
+       RETURNING id, email, reddit, nickname, role_id, rank_id, is_indonesian, created_at`,
+      [email, securePassword, cleanReddit, nickname || null, targetRankId, targetIsIndonesian]
     );
 
     const createdUser = newUser.rows[0];
@@ -82,12 +83,19 @@ adminUsers.post('/users', async (c) => {
       `SELECT u.id, u.email,
               (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
-              u.reddit, u.nickname, u.role_id, u.rank_id, u.created_at
+              u.reddit, u.nickname, u.role_id, u.rank_id, u.is_indonesian, u.created_at
        FROM users u WHERE u.id = $1`,
       [createdUser.id]
     );
 
-    return c.json({ success: true, user: createdUserRes.rows[0] });
+    const createdUserData = createdUserRes.rows[0];
+    return c.json({
+      success: true,
+      user: {
+        ...createdUserData,
+        is_indonesian: Boolean(createdUserData.is_indonesian),
+      },
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin create user error');
     return c.json(body, status);
@@ -108,7 +116,7 @@ adminUsers.get('/users', async (c) => {
       SELECT u.id, u.email,
              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
-             u.reddit, u.nickname, u.role_id, u.rank_id,
+             u.reddit, u.nickname, u.role_id, u.rank_id, u.is_indonesian,
              ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
              COALESCE(
                (SELECT SUM(t.price) 
@@ -193,6 +201,7 @@ adminUsers.get('/users', async (c) => {
       rankName: row.rank_name || 'Rank D',
       cqmLevel: row.cqm_level || 'Lowest',
       rankLevel: typeof row.rank_level === 'number' ? row.rank_level : 1,
+      is_indonesian: Boolean(row.is_indonesian),
       createdAt: row.created_at,
       pendingBalance: parseFloat(row.pending_balance),
       paidBalance: parseFloat(row.paid_balance),
@@ -230,7 +239,7 @@ adminUsers.get('/users/search', async (c) => {
       SELECT u.id, u.email,
              (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
-             u.reddit, u.nickname, u.role_id, u.rank_id, ar.rank_name, u.created_at
+             u.reddit, u.nickname, u.role_id, u.rank_id, ar.rank_name, u.is_indonesian, u.created_at
       FROM users u
       LEFT JOIN account_ranks ar ON u.rank_id = ar.id
       WHERE 1=1
@@ -258,6 +267,7 @@ adminUsers.get('/users/search', async (c) => {
       nickname: row.nickname,
       rankId: row.rank_id || 'D',
       rankName: row.rank_name || 'Rank D',
+      is_indonesian: Boolean(row.is_indonesian),
       createdAt: row.created_at,
     }));
 
@@ -278,7 +288,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
       `SELECT u.id, u.email,
               (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
-              u.reddit, u.nickname, u.role_id, u.rank_id,
+              u.reddit, u.nickname, u.role_id, u.rank_id, u.is_indonesian,
               ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', ph.id, 'user_id', ph.user_id, 'username', ph.username, 'headline', ph.headline, 'bio', ph.bio, 'created_at', ph.created_at, 'updated_at', ph.updated_at)) FILTER (WHERE ph.id IS NOT NULL), '[]'::jsonb)
                FROM producthunt_accounts ph WHERE ph.user_id = u.id) as producthunt_accounts
@@ -380,6 +390,7 @@ adminUsers.get('/users/:id/detail', async (c) => {
           cqmLevel: accountRank.cqm_level,
           rankLevel: accountRank.rank_level,
           bookingLimit,
+          is_indonesian: Boolean(user.is_indonesian),
         },
         metrics: {
           activeBookingCount,
@@ -413,8 +424,9 @@ adminUsers.put('/users/:id', async (c) => {
       throw new BusinessError('MISSING_FIELD', 'Email and Reddit username/link are required');
     }
 
-    const { email, paypal, reddit, nickname, rankId, rank_id } = body;
+    const { email, paypal, reddit, nickname, rankId, rank_id, is_indonesian } = body;
     const targetRankId = rankId || rank_id || null;
+    const targetIsIndonesian = is_indonesian !== undefined ? Boolean(is_indonesian) : null;
 
     validateEmail(email);
     if (paypal) {
@@ -451,10 +463,12 @@ adminUsers.put('/users/:id', async (c) => {
 
     const query = `UPDATE users 
              SET email = $1, reddit = $2, nickname = $3,
-                 rank_id = COALESCE($4, rank_id), updated_at = NOW() 
-             WHERE id = $5 
-             RETURNING id, email, reddit, nickname, role_id, rank_id, created_at`;
-    const params = [email, cleanReddit, nickname || null, targetRankId, id];
+                 rank_id = COALESCE($4, rank_id),
+                 is_indonesian = COALESCE($5, is_indonesian),
+                 updated_at = NOW() 
+             WHERE id = $6 
+             RETURNING id, email, reddit, nickname, role_id, rank_id, is_indonesian, created_at`;
+    const params = [email, cleanReddit, nickname || null, targetRankId, targetIsIndonesian, id];
 
     const result = await pool.query(query, params);
 
@@ -485,12 +499,19 @@ adminUsers.put('/users/:id', async (c) => {
       `SELECT u.id, u.email,
               (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info,
-              u.reddit, u.nickname, u.role_id, u.rank_id, u.created_at
+              u.reddit, u.nickname, u.role_id, u.rank_id, u.is_indonesian, u.created_at
        FROM users u WHERE u.id = $1`,
       [id]
     );
 
-    return c.json({ success: true, user: updatedUserRes.rows[0] });
+    const updatedUserData = updatedUserRes.rows[0];
+    return c.json({
+      success: true,
+      user: {
+        ...updatedUserData,
+        is_indonesian: Boolean(updatedUserData.is_indonesian),
+      },
+    });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin update user profile error');
     return c.json(body, status);

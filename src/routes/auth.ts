@@ -12,17 +12,42 @@ const SESSION_COOKIE = 'crm_session';
 const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400';
 const EXPIRED_SESSION_COOKIE = 'HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0';
 
-auth.get('/me', authMiddleware(), (c) => {
+auth.get('/me', authMiddleware(), async (c) => {
   const user = c.get('user');
   if (!user) return c.json({ error: 'Unauthenticated' }, 401);
+
+  const pool = getDbPool(c.env.DATABASE_URL);
+  const userRes = await pool.query(
+    `SELECT u.is_indonesian, u.reddit, u.nickname, u.role_id, u.rank_id,
+            ar.rank_name, ar.cqm_level, ar.rank_level,
+            (SELECT pi.account_details->>'username' FROM payment_info pi WHERE pi.user_id = u.id AND pi.type = 'paypal' LIMIT 1) as paypal,
+            (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', pi.id, 'type', pi.type, 'account_details', pi.account_details)) FILTER (WHERE pi.id IS NOT NULL), '[]'::jsonb) FROM payment_info pi WHERE pi.user_id = u.id) as payment_info
+     FROM users u
+     LEFT JOIN account_ranks ar ON u.rank_id = ar.id
+     WHERE u.id = $1`,
+    [user.id]
+  );
+  const dbUser = userRes.rows[0];
+  const is_indonesian = Boolean(dbUser ? dbUser.is_indonesian : (user.is_indonesian ?? false));
 
   return c.json({
     user: {
       id: user.id,
       email: user.email,
       roles: user.roles,
-      rank_id: user.rank_id,
-      account_rank: user.account_rank,
+      rank_id: dbUser?.rank_id || user.rank_id,
+      account_rank: dbUser ? {
+        id: dbUser.rank_id || 'D',
+        rank_name: dbUser.rank_name || 'Rank D',
+        cqm_level: dbUser.cqm_level || 'Lowest',
+        rank_level: typeof dbUser.rank_level === 'number' ? dbUser.rank_level : 1,
+      } : user.account_rank,
+      is_indonesian,
+      paypal: dbUser?.paypal || null,
+      paymentInfo: dbUser?.payment_info || [],
+      reddit: dbUser?.reddit,
+      nickname: dbUser?.nickname,
+      role_id: dbUser?.role_id || user.roles[0],
     },
   });
 });
@@ -81,6 +106,8 @@ auth.post(
       rank_level: typeof user.rank_level === 'number' ? user.rank_level : 1,
     };
 
+    const is_indonesian = Boolean(user.is_indonesian);
+
     // 4. Sign standard-compliant JWT token valid for 24 hours
     const now = Math.floor(Date.now() / 1000);
     const payload = {
@@ -89,6 +116,7 @@ auth.post(
       roles: roles,
       rank_id: accountRank.id,
       account_rank: accountRank,
+      is_indonesian,
       iss: 'reddit-crm-api',
       aud: 'reddit-crm-client',
       iat: now,
@@ -110,6 +138,7 @@ auth.post(
         roles: roles,
         rank_id: accountRank.id,
         account_rank: accountRank,
+        is_indonesian,
       },
     });
   } catch (error: any) {

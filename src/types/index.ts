@@ -35,6 +35,7 @@ export interface UserPayload {
   roles: string[];
   rank_id?: string;
   account_rank?: AccountRank;
+  is_indonesian?: boolean;
 }
 
 export type Variables = {

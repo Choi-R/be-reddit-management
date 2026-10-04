@@ -31,7 +31,10 @@ cron.post('/cleanup', async (c) => {
                 (ar.rank_level >= 4 AND ut.created_at < NOW() - INTERVAL '100 hours')
                 OR (ar.rank_level < 4 AND ut.created_at < NOW() - INTERVAL '60 hours')
               )
-              AND t.assigned_to IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM task_assignments ta
+                WHERE ta.task_id = t.id
+              )
             RETURNING ut.task_id
         ),
         quota_deltas AS (

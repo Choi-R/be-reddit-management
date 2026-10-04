@@ -34,6 +34,51 @@ async function resolveUserId(pool: any, identifier: string | null | undefined): 
   return userRes.rows[0].id;
 }
 
+async function resolveUserIds(pool: any, assignedTo: string | string[] | null | undefined): Promise<string[]> {
+  if (!assignedTo) {
+    return [];
+  }
+
+  const identifiers = Array.isArray(assignedTo) ? assignedTo : [assignedTo];
+  const deduped = new Set<string>();
+  const resolved: string[] = [];
+
+  for (const raw of identifiers) {
+    if (typeof raw !== 'string') {
+      throw new BusinessError('INVALID_INPUT', 'Assigned users must be provided as identifiers or an array of identifiers.');
+    }
+
+    const clean = raw.trim();
+    if (!clean) {
+      continue;
+    }
+
+    const userId = await resolveUserId(pool, clean);
+    if (userId && !deduped.has(userId)) {
+      deduped.add(userId);
+      resolved.push(userId);
+    }
+  }
+
+  return resolved;
+}
+
+async function replaceTaskAssignments(client: any, taskId: string, userIds: string[]): Promise<void> {
+  await client.query(
+    `DELETE FROM task_assignments WHERE task_id = $1`,
+    [taskId]
+  );
+
+  for (const userId of userIds) {
+    await client.query(
+      `INSERT INTO task_assignments (task_id, user_id, created_at, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (task_id, user_id) DO NOTHING`,
+      [taskId, userId]
+    );
+  }
+}
+
 // 1. Create a new Task configuration
 adminTasks.post('/tasks', async (c) => {
   try {
@@ -77,7 +122,6 @@ adminTasks.post('/tasks', async (c) => {
     }
 
     const pool = getDbPool(c.env.DATABASE_URL);
-    const resolvedAssignedTo = await resolveUserId(pool, assignedTo);
 
     if (targetMinRankId) {
       const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetMinRankId]);
@@ -86,19 +130,27 @@ adminTasks.post('/tasks', async (c) => {
       }
     }
 
+    const resolvedAssignedUserIds = await resolveUserIds(pool, assignedTo);
+
     // Check Telegram notification cooldown (12h since latest task) BEFORE inserting new task
     const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
 
-    const result = await pool.query(
-      `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, NOW(), NOW())
-       RETURNING *`,
-      [platform, targetSubreddit || null, url, clientRequest, quota, resolvedAssignedTo, price, deadline || null, targetMinRankId]
-    );
+    const result = await withTransaction(pool, async (client) => {
+      const taskInsert = await client.query(
+        `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7, $8, NOW(), NOW())
+         RETURNING *`,
+        [platform, targetSubreddit || null, url, clientRequest, quota, price, deadline || null, targetMinRankId]
+      );
+
+      const task = taskInsert.rows[0];
+      await replaceTaskAssignments(client, task.id, resolvedAssignedUserIds);
+      return task;
+    });
 
     return c.json({
       success: true,
-      task: result.rows[0],
+      task: result,
       telegramNotified: telegramResult.notified,
       telegramReason: telegramResult.reason
     });
@@ -400,7 +452,7 @@ adminTasks.put('/tasks/:id', async (c) => {
       throw new BusinessError('CANNOT_EDIT', 'Deleted tasks cannot be edited.');
     }
 
-    const resolvedAssignedTo = await resolveUserId(pool, assignedTo);
+    const resolvedAssignedUserIds = await resolveUserIds(pool, assignedTo);
 
     if (targetMinRankId) {
       const rankCheck = await pool.query('SELECT 1 FROM account_ranks WHERE id = $1 LIMIT 1', [targetMinRankId]);
@@ -422,38 +474,43 @@ adminTasks.put('/tasks/:id', async (c) => {
       restoreSql = `, is_archived = ${targetArchived ? 'TRUE' : 'FALSE'}`;
     }
 
-    const result = await pool.query(
-      `UPDATE tasks 
-       SET platform = $1,
-           target_subreddit = $2, 
-           url = $3, 
-           client_request = $4, 
-           quota = GREATEST(0, $5 - (
-             SELECT COUNT(*)::int 
-             FROM user_tasks 
-             WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid')
-           )), 
-           original_quota = GREATEST(
-             $5, 
-             (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid'))
-           ),
-           assigned_to = $6, 
-           price = $7, 
-           deadline = $8, 
-           min_rank_id = $9, 
-           updated_at = NOW() ${restoreSql}
-       WHERE id = $10 
-       RETURNING *`,
-      [platform, targetSubreddit || null, url, clientRequest, targetTotalQuota, resolvedAssignedTo, price, deadline || null, targetMinRankId, id]
-    );
+    const result = await withTransaction(pool, async (client) => {
+      const updatedTask = await client.query(
+        `UPDATE tasks 
+         SET platform = $1,
+             target_subreddit = $2, 
+             url = $3, 
+             client_request = $4, 
+             quota = GREATEST(0, $5 - (
+               SELECT COUNT(*)::int 
+               FROM user_tasks 
+               WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid')
+             )), 
+             original_quota = GREATEST(
+               $5, 
+               (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid'))
+             ),
+             assigned_to = NULL,
+             price = $6, 
+             deadline = $7, 
+             min_rank_id = $8, 
+             updated_at = NOW() ${restoreSql}
+         WHERE id = $9 
+         RETURNING *`,
+        [platform, targetSubreddit || null, url, clientRequest, targetTotalQuota, price, deadline || null, targetMinRankId, id]
+      );
 
-    if (result.rows.length === 0) {
-      throw new BusinessError('NOT_FOUND', 'Task not found');
-    }
+      if (updatedTask.rows.length === 0) {
+        throw new BusinessError('NOT_FOUND', 'Task not found');
+      }
+
+      await replaceTaskAssignments(client, id, resolvedAssignedUserIds);
+      return updatedTask.rows[0];
+    });
 
     return c.json({
       success: true,
-      task: result.rows[0]
+      task: result
     });
   } catch (error: unknown) {
     const { body, status } = handleRouteError(error, 'Admin update task error');

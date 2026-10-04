@@ -108,7 +108,7 @@ tasks.get('/available', async (c) => {
     // Query details:
     // - Quota must be > 0
     // - Task must not have expired (deadline is null or in the future)
-    // - Task is either unassigned or assigned explicitly to the current user
+    // - Task is visible to any user if the assignee list is empty, or visible only to current user when that user is in the task assignment membership list
     // - User has no booking history for this task
     const platformFilter = c.req.query('platform') || '';
     const platformParam = platformFilter.toUpperCase();
@@ -122,7 +122,10 @@ tasks.get('/available', async (c) => {
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
        WHERE t.quota > 0
          AND (t.deadline IS NULL OR t.deadline > NOW())
-         AND (t.assigned_to IS NULL OR t.assigned_to = $1)
+         AND (
+           NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = t.id)
+           OR EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = t.id AND ta.user_id = $1)
+         )
          AND t.deleted_at IS NULL
          AND t.is_archived = FALSE
          AND (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'failed') < (3 * COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1))
@@ -259,7 +262,17 @@ tasks.post('/book', writeLimiter, async (c) => {
       if ((task.count_failed || 0) >= maxFailThreshold) {
         throw new BusinessError('EXPIRED', 'This task has been archived due to excessive failed attempts.');
       }
-      if (task.assigned_to && task.assigned_to !== user.id) {
+
+      const assigneeCheck = await client.query(
+        `SELECT 1 FROM task_assignments WHERE task_id = $1 AND user_id = $2 LIMIT 1`,
+        [taskId, user.id]
+      );
+      const hasAssignmentMembership = assigneeCheck.rows.length > 0;
+      const taskHasAnyAssignment = await client.query(
+        `SELECT 1 FROM task_assignments WHERE task_id = $1 LIMIT 1`,
+        [taskId]
+      );
+      if (taskHasAnyAssignment.rows.length > 0 && !hasAssignmentMembership) {
         throw new BusinessError('FORBIDDEN', 'This task is assigned to another user.', 403);
       }
 

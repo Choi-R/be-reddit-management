@@ -46,6 +46,7 @@ CREATE TABLE users (
     nickname TEXT,
     role_id TEXT REFERENCES roles(id) DEFAULT 'basic' NOT NULL,
     rank_id TEXT REFERENCES account_ranks(id) DEFAULT 'D' NOT NULL,
+    is_indonesian BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
@@ -75,6 +76,15 @@ CREATE TABLE tasks (
     is_archived BOOLEAN DEFAULT FALSE NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Table: task_assignments
+CREATE TABLE task_assignments (
+    task_id UUID REFERENCES tasks(id) ON DELETE CASCADE NOT NULL,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    PRIMARY KEY (task_id, user_id)
 );
 
 -- Table: user_tasks
@@ -112,6 +122,7 @@ CREATE TRIGGER update_account_ranks_updated_at BEFORE UPDATE ON account_ranks FO
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_task_status_updated_at BEFORE UPDATE ON task_status FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_task_assignments_updated_at BEFORE UPDATE ON task_assignments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_producthunt_accounts_updated_at BEFORE UPDATE ON producthunt_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -120,6 +131,8 @@ CREATE TRIGGER update_producthunt_accounts_updated_at BEFORE UPDATE ON producthu
 -- -------------------------------------------------------------
 CREATE INDEX idx_user_tasks_user_status ON user_tasks(user_id, status_id);
 CREATE INDEX idx_user_tasks_task ON user_tasks(task_id);
+CREATE INDEX idx_task_assignments_task ON task_assignments(task_id);
+CREATE INDEX idx_task_assignments_user ON task_assignments(user_id);
 CREATE INDEX idx_tasks_quota_deadline ON tasks(quota, deadline);
 CREATE INDEX idx_tasks_is_archived ON tasks(is_archived);
 CREATE INDEX idx_tasks_deleted_at ON tasks(deleted_at);
