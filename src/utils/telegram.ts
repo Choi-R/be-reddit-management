@@ -69,13 +69,23 @@ export async function sendTelegramNotification(
 export async function checkAndNotifyTelegramTaskCreated(
   pool: any,
   env: Env,
-  taskCount: number = 1
+  taskCount: number = 1,
+  excludeTaskIds?: string | string[]
 ): Promise<{ notified: boolean; reason: string }> {
   try {
-    // Query the timestamp of the latest task currently in the DB before inserting new task
-    const latestTaskRes = await pool.query(
-      `SELECT created_at FROM tasks ORDER BY created_at DESC LIMIT 1`
-    );
+    const rawIds = Array.isArray(excludeTaskIds) ? excludeTaskIds : (excludeTaskIds ? [excludeTaskIds] : []);
+    const validIds = rawIds.filter((id) => typeof id === 'string' && id.trim() !== '');
+
+    let queryText = 'SELECT created_at FROM tasks';
+    const queryParams: any[] = [];
+    if (validIds.length > 0) {
+      queryText += ' WHERE id != ALL($1)';
+      queryParams.push(validIds);
+    }
+    queryText += ' ORDER BY created_at DESC LIMIT 1';
+
+    // Query the timestamp of the latest task currently in the DB before this batch/task was inserted
+    const latestTaskRes = await pool.query(queryText, queryParams);
 
     let shouldNotify = false;
     let hoursSinceLast = 0;

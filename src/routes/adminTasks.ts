@@ -18,10 +18,10 @@ async function resolveUserId(pool: any, identifier: string | null | undefined): 
 
   const userRes = await pool.query(
     `SELECT id FROM users 
-     WHERE email = $1 
-        OR reddit = $1 
-        OR reddit = $2
-        OR nickname = $1
+     WHERE LOWER(email) = LOWER($1) 
+        OR LOWER(reddit) = LOWER($1) 
+        OR LOWER(reddit) = LOWER($2)
+        OR LOWER(nickname) = LOWER($1)
         OR id::text = $1 
      LIMIT 1`,
     [cleanVal, strippedReddit]
@@ -140,21 +140,30 @@ adminTasks.post('/tasks', async (c) => {
 
     const resolvedAssignedUserIds = await resolveUserIds(pool, assignedTo);
 
-    // Check Telegram notification cooldown (12h since latest task) BEFORE inserting new task
-    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1);
-
     const result = await withTransaction(pool, async (client) => {
       const taskInsert = await client.query(
         `INSERT INTO tasks (platform, target_subreddit, url, client_request, quota, original_quota, assigned_to, price, deadline, min_rank_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7, $8, NOW(), NOW())
+         VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, NOW(), NOW())
          RETURNING *`,
-        [platform, targetSubreddit || null, url, clientRequest, quota, price, deadline || null, targetMinRankId]
+        [platform, targetSubreddit || null, url, clientRequest, quota, resolvedAssignedUserIds[0] || null, price, deadline || null, targetMinRankId]
       );
 
       const task = taskInsert.rows[0];
       await replaceTaskAssignments(client, task.id, resolvedAssignedUserIds);
       return task;
     });
+
+    // Check Telegram notification cooldown (12h since previous task) AFTER successful transaction
+    // Only notify public Telegram group if the task is NOT assigned to specific user(s)
+    let telegramResult: { notified: boolean; reason: string };
+    if (resolvedAssignedUserIds.length > 0) {
+      telegramResult = {
+        notified: false,
+        reason: 'Task is assigned to specific user(s); public notification skipped.'
+      };
+    } else {
+      telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, 1, result.id);
+    }
 
     return c.json({
       success: true,
@@ -276,9 +285,6 @@ adminTasks.post('/tasks/bulk', async (c) => {
       });
     }
 
-    // Check Telegram notification cooldown (12h since latest task) BEFORE bulk inserting new tasks
-    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, validatedTasks.length);
-
     const insertedTasks = await withTransaction(pool, async (client) => {
       const results = [];
       for (const t of validatedTasks) {
@@ -292,6 +298,10 @@ adminTasks.post('/tasks/bulk', async (c) => {
       }
       return results;
     });
+
+    // Check Telegram notification cooldown (12h since previous task) AFTER successful bulk insertion
+    const insertedIds = insertedTasks.map((t) => t.id);
+    const telegramResult = await checkAndNotifyTelegramTaskCreated(pool, c.env, validatedTasks.length, insertedIds);
 
     return c.json({
       success: true,
@@ -329,7 +339,7 @@ adminTasks.get('/tasks', async (c) => {
       `SELECT t.id, t.platform, t.target_subreddit, t.url, t.client_request, t.quota, COALESCE(NULLIF(t.original_quota, 0), NULLIF(t.quota, 0), 1) as original_quota,
               t.price, t.deadline, t.min_rank_id, ar.rank_name as min_rank_name, ar.cqm_level as min_rank_cqm, ar.rank_level as min_rank_level,
               t.deleted_at, t.is_archived, t.created_at, t.updated_at,
-              u.email as assigned_to_email,
+              COALESCE((SELECT string_agg(u2.email, ', ') FROM task_assignments ta JOIN users u2 ON ta.user_id = u2.id WHERE ta.task_id = t.id), u.email) as assigned_to_email,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'incomplete') as count_incomplete,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'pending') as count_pending,
               (SELECT COUNT(*)::int FROM user_tasks ut WHERE ut.task_id = t.id AND ut.status_id = 'success') as count_success,
@@ -514,14 +524,14 @@ adminTasks.put('/tasks/:id', async (c) => {
                $5, 
                (SELECT COUNT(*)::int FROM user_tasks WHERE task_id = tasks.id AND status_id IN ('incomplete', 'pending', 'success', 'paid'))
              ),
-             assigned_to = NULL,
-             price = $6, 
-             deadline = $7, 
-             min_rank_id = $8, 
+             assigned_to = $6,
+             price = $7, 
+             deadline = $8, 
+             min_rank_id = $9, 
              updated_at = NOW() ${restoreSql}
-         WHERE id = $9 
+         WHERE id = $10 
          RETURNING *`,
-        [platform, targetSubreddit || null, url, clientRequest, targetTotalQuota, price, deadline || null, targetMinRankId, id]
+        [platform, targetSubreddit || null, url, clientRequest, targetTotalQuota, resolvedAssignedUserIds[0] || null, price, deadline || null, targetMinRankId, id]
       );
 
       if (updatedTask.rows.length === 0) {
