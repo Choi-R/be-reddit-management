@@ -89,12 +89,20 @@ adminTasks.post('/tasks', async (c) => {
 
     const { url, clientRequest, quota, assignedTo, price, deadline, minRankId, min_rank_id } = body;
     const targetMinRankId = minRankId || min_rank_id || null;
-    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT' | 'X';
+    if (!['REDDIT', 'PRODUCTHUNT', 'X'].includes(platform)) {
+      throw new BusinessError('INVALID_INPUT', 'Platform must be REDDIT, PRODUCTHUNT, or X');
+    }
     let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
     if (platform === 'REDDIT' && url) {
       const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
       if (match) {
+        targetSubreddit = match[1];
+      }
+    } else if (platform === 'X' && url && !targetSubreddit) {
+      const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)(?:\/status|\/|$)/i);
+      if (match && !['home', 'explore', 'notifications', 'messages', 'i', 'search'].includes(match[1].toLowerCase())) {
         targetSubreddit = match[1];
       }
     }
@@ -179,7 +187,7 @@ adminTasks.post('/tasks/bulk', async (c) => {
     const pool = getDbPool(c.env.DATABASE_URL);
 
     const validatedTasks: Array<{
-      platform: 'REDDIT' | 'PRODUCTHUNT';
+      platform: 'REDDIT' | 'PRODUCTHUNT' | 'X';
       targetSubreddit: string | null;
       url: string;
       clientRequest: string;
@@ -231,11 +239,19 @@ adminTasks.post('/tasks/bulk', async (c) => {
         parsedDeadline = d.toISOString();
       }
 
-      const taskPlatform = (platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+      const taskPlatform = (platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT' | 'X';
+      if (!['REDDIT', 'PRODUCTHUNT', 'X'].includes(taskPlatform)) {
+        throw new BusinessError('INVALID_INPUT', `Row ${rowNum}: Platform must be REDDIT, PRODUCTHUNT, or X`);
+      }
       let targetSubreddit: string | null = target_subreddit || subreddit || null;
       if (taskPlatform === 'REDDIT' && url) {
         const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
         if (match) {
+          targetSubreddit = match[1];
+        }
+      } else if (taskPlatform === 'X' && url && !targetSubreddit) {
+        const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)(?:\/status|\/|$)/i);
+        if (match && !['home', 'explore', 'notifications', 'messages', 'i', 'search'].includes(match[1].toLowerCase())) {
           targetSubreddit = match[1];
         }
       }
@@ -410,12 +426,20 @@ adminTasks.put('/tasks/:id', async (c) => {
 
     const { url, clientRequest, quota, originalQuota, assignedTo, price, deadline, minRankId, min_rank_id, restore, isArchived, is_archived } = body;
     const targetMinRankId = minRankId || min_rank_id || null;
-    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT';
+    const platform = (body.platform || 'REDDIT').toUpperCase() as 'REDDIT' | 'PRODUCTHUNT' | 'X';
+    if (!['REDDIT', 'PRODUCTHUNT', 'X'].includes(platform)) {
+      throw new BusinessError('INVALID_INPUT', 'Platform must be REDDIT, PRODUCTHUNT, or X');
+    }
     let targetSubreddit = body.target_subreddit || body.subreddit || null;
 
     if (platform === 'REDDIT' && url) {
       const match = url.match(/\/r\/([a-zA-Z0-9_-]+)/i);
       if (match) {
+        targetSubreddit = match[1];
+      }
+    } else if (platform === 'X' && url && !targetSubreddit) {
+      const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)(?:\/status|\/|$)/i);
+      if (match && !['home', 'explore', 'notifications', 'messages', 'i', 'search'].includes(match[1].toLowerCase())) {
         targetSubreddit = match[1];
       }
     }

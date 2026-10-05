@@ -64,3 +64,26 @@ export function extractProductHuntUsername(input: string): string {
 
   return cleaned.trim();
 }
+
+// Extract X (Twitter) username from @username or https://x.com/username or https://twitter.com/username
+export function extractXUsername(input: string): string {
+  if (!input) return '';
+  let cleaned = input.trim();
+
+  // Strip protocol and host for x.com and twitter.com
+  cleaned = cleaned.replace(/^(https?:\/\/)?(www\.)?(x\.com|twitter\.com)\//i, '');
+
+  // Strip leading slash
+  cleaned = cleaned.replace(/^\//, '');
+
+  // Strip leading @ symbol
+  if (cleaned.startsWith('@')) {
+    cleaned = cleaned.substring(1);
+  }
+
+  // Take the first segment (strip trailing slashes/subpaths or query params)
+  cleaned = cleaned.split('/')[0].split('?')[0];
+
+  return cleaned.trim();
+}
+

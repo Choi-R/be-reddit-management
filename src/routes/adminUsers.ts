@@ -4,7 +4,7 @@ import { createPasswordHash } from '../utils/crypto';
 import { BusinessError, handleRouteError } from '../utils/errors';
 import { Env, Variables } from '../types';
 import { sendNewUserNotificationEmail } from '../utils/email';
-import { validateEmail, validateStringField, extractRedditUsername, extractProductHuntUsername } from '../utils/validation';
+import { validateEmail, validateStringField, extractRedditUsername, extractProductHuntUsername, extractXUsername } from '../utils/validation';
 
 const adminUsers = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -291,7 +291,9 @@ adminUsers.get('/users/:id/detail', async (c) => {
               u.reddit, u.nickname, u.role_id, u.rank_id, u.is_indonesian,
               ar.rank_name, ar.cqm_level, ar.rank_level, u.created_at,
               (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', ph.id, 'user_id', ph.user_id, 'username', ph.username, 'headline', ph.headline, 'bio', ph.bio, 'created_at', ph.created_at, 'updated_at', ph.updated_at)) FILTER (WHERE ph.id IS NOT NULL), '[]'::jsonb)
-               FROM producthunt_accounts ph WHERE ph.user_id = u.id) as producthunt_accounts
+               FROM producthunt_accounts ph WHERE ph.user_id = u.id) as producthunt_accounts,
+              (SELECT COALESCE(jsonb_agg(jsonb_build_object('id', x.id, 'user_id', x.user_id, 'username', x.username, 'headline', x.headline, 'bio', x.bio, 'created_at', x.created_at, 'updated_at', x.updated_at)) FILTER (WHERE x.id IS NOT NULL), '[]'::jsonb)
+               FROM x_accounts x WHERE x.user_id = u.id) as x_accounts
        FROM users u
        LEFT JOIN account_ranks ar ON u.rank_id = ar.id
        WHERE u.id = $1`,
@@ -391,6 +393,8 @@ adminUsers.get('/users/:id/detail', async (c) => {
           rankLevel: accountRank.rank_level,
           bookingLimit,
           is_indonesian: Boolean(user.is_indonesian),
+          producthunt_accounts: user.producthunt_accounts || [],
+          x_accounts: user.x_accounts || [],
         },
         metrics: {
           activeBookingCount,
@@ -711,4 +715,133 @@ adminUsers.delete('/users/:userId/producthunt-accounts/:phId', async (c) => {
   }
 });
 
+// 11. Create an X account for a user
+adminUsers.post('/users/:userId/x-accounts', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.username) {
+      throw new BusinessError('MISSING_FIELD', 'Username is required');
+    }
+
+    const username = extractXUsername(body.username);
+    if (!username) {
+      throw new BusinessError('INVALID_INPUT', 'A valid X username is required');
+    }
+
+    const { headline, bio, about } = body;
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const result = await pool.query(
+      `INSERT INTO x_accounts (user_id, username, headline, bio, about, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+       RETURNING *`,
+      [userId, username, headline || null, bio || null, about || null]
+    );
+
+    return c.json({ success: true, account: result.rows[0] });
+  } catch (error: unknown) {
+    console.error('Admin create X account error:', error);
+    const { body, status } = handleRouteError(error, 'Admin create X account error');
+    return c.json(body, status);
+  }
+});
+
+// 12. List X accounts for a user
+adminUsers.get('/users/:userId/x-accounts', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const userCheck = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'User not found');
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM x_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    return c.json({ success: true, accounts: result.rows });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin list X accounts error');
+    return c.json(body, status);
+  }
+});
+
+// 13. Update an X account
+adminUsers.put('/users/:userId/x-accounts/:xId', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const xId = c.req.param('xId');
+    const body = await c.req.json().catch(() => null);
+    if (!body || !body.username) {
+      throw new BusinessError('MISSING_FIELD', 'Username is required');
+    }
+
+    const username = extractXUsername(body.username);
+    if (!username) {
+      throw new BusinessError('INVALID_INPUT', 'A valid X username is required');
+    }
+
+    const { headline, bio, about } = body;
+
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const accountCheck = await pool.query(
+      'SELECT 1 FROM x_accounts WHERE id = $1 AND user_id = $2',
+      [xId, userId]
+    );
+    if (accountCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'X account not found');
+    }
+
+    const result = await pool.query(
+      `UPDATE x_accounts 
+       SET username = $1, headline = $2, bio = $3, about = $4, updated_at = NOW()
+       WHERE id = $5 AND user_id = $6
+       RETURNING *`,
+      [username, headline || null, bio || null, about || null, xId, userId]
+    );
+
+    return c.json({ success: true, account: result.rows[0] });
+  } catch (error: unknown) {
+    console.error('Admin update X account error:', error);
+    const { body, status } = handleRouteError(error, 'Admin update X account error');
+    return c.json(body, status);
+  }
+});
+
+// 14. Delete an X account
+adminUsers.delete('/users/:userId/x-accounts/:xId', async (c) => {
+  try {
+    const userId = c.req.param('userId');
+    const xId = c.req.param('xId');
+    const pool = getDbPool(c.env.DATABASE_URL);
+
+    const accountCheck = await pool.query(
+      'SELECT 1 FROM x_accounts WHERE id = $1 AND user_id = $2',
+      [xId, userId]
+    );
+    if (accountCheck.rows.length === 0) {
+      throw new BusinessError('NOT_FOUND', 'X account not found');
+    }
+
+    await pool.query('DELETE FROM x_accounts WHERE id = $1 AND user_id = $2', [xId, userId]);
+
+    return c.json({ success: true, message: 'X account deleted successfully' });
+  } catch (error: unknown) {
+    const { body, status } = handleRouteError(error, 'Admin delete X account error');
+    return c.json(body, status);
+  }
+});
+
 export default adminUsers;
+

@@ -112,7 +112,7 @@ tasks.get('/available', async (c) => {
     // - User has no booking history for this task
     const platformFilter = c.req.query('platform') || '';
     const platformParam = platformFilter.toUpperCase();
-    const hasValidPlatformFilter = ['REDDIT', 'PRODUCTHUNT'].includes(platformParam);
+    const hasValidPlatformFilter = ['REDDIT', 'PRODUCTHUNT', 'X'].includes(platformParam);
     const platformWhere = hasValidPlatformFilter ? 'AND t.platform = $2' : '';
 
     const availableTasks = await pool.query(
@@ -437,6 +437,11 @@ tasks.post('/submit', writeLimiter, async (c) => {
       if (!isProductHuntHost) {
         throw new BusinessError('INVALID_INPUT', 'Reply URL must be a producthunt.com domain link');
       }
+    } else if (taskPlatform === 'X') {
+      const isXHost = host === 'x.com' || host.endsWith('.x.com') || host === 'twitter.com' || host.endsWith('.twitter.com');
+      if (!isXHost) {
+        throw new BusinessError('INVALID_INPUT', 'Reply URL must be an x.com or twitter.com domain link');
+      }
     } else {
       const isRedditHost = host === 'reddit.com' || host.endsWith('.reddit.com') || host === 'redd.it';
       if (!isRedditHost) {
@@ -445,7 +450,7 @@ tasks.post('/submit', writeLimiter, async (c) => {
     }
 
     // 3. Validate subreddit matching if restricted by the task
-    if (taskSubreddit) {
+    if (taskPlatform === 'REDDIT' && taskSubreddit) {
       const pathParts = parsedUrl.pathname.split('/');
       const rIdx = pathParts.findIndex(part => part.toLowerCase() === 'r');
       if (rIdx === -1 || !pathParts[rIdx + 1] || pathParts[rIdx + 1].toLowerCase() !== taskSubreddit.toLowerCase()) {
@@ -497,7 +502,7 @@ tasks.get('/earnings', async (c) => {
     // A. Fetch task list with payouts
     const history = await pool.query(
       `SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note, ut.created_at, ut.updated_at,
-              t.id as task_id, t.target_subreddit AS subreddit, t.price, t.min_rank_id, ar.rank_name as min_rank_name
+              t.id as task_id, t.platform, t.target_subreddit, t.target_subreddit AS subreddit, t.price, t.min_rank_id, ar.rank_name as min_rank_name
        FROM user_tasks ut
        JOIN tasks t ON ut.task_id = t.id
        LEFT JOIN account_ranks ar ON t.min_rank_id = ar.id
@@ -576,7 +581,7 @@ tasks.get('/history', async (c) => {
     const historyQuery = `
       SELECT ut.id as booking_id, ut.status_id, ut.reply_url, ut.note, ut.admin_note,
              ut.created_at, ut.updated_at,
-              t.id as task_id, t.target_subreddit AS subreddit, t.url as task_url, t.client_request, t.price, t.deadline,
+              t.id as task_id, t.platform, t.target_subreddit, t.target_subreddit AS subreddit, t.url as task_url, t.client_request, t.price, t.deadline,
              ar.rank_name as min_rank_name
       FROM user_tasks ut
       JOIN tasks t ON ut.task_id = t.id

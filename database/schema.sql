@@ -62,7 +62,7 @@ CREATE TABLE task_status (
 -- Table: tasks
 CREATE TABLE tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    platform TEXT NOT NULL DEFAULT 'REDDIT' CHECK (platform IN ('REDDIT', 'PRODUCTHUNT')),
+    platform TEXT NOT NULL DEFAULT 'REDDIT' CHECK (platform IN ('REDDIT', 'PRODUCTHUNT', 'X')),
     target_subreddit TEXT,
     url TEXT NOT NULL,
     client_request TEXT NOT NULL,
@@ -114,6 +114,18 @@ CREATE TABLE producthunt_accounts (
     updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
+-- Table: x_accounts
+CREATE TABLE x_accounts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    username TEXT NOT NULL,
+    headline TEXT,
+    bio TEXT,
+    about TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
 -- -------------------------------------------------------------
 -- 3. Create Triggers for updated_at Autoupdate
 -- -------------------------------------------------------------
@@ -125,6 +137,7 @@ CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECU
 CREATE TRIGGER update_task_assignments_updated_at BEFORE UPDATE ON task_assignments FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_tasks_updated_at BEFORE UPDATE ON user_tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_producthunt_accounts_updated_at BEFORE UPDATE ON producthunt_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_x_accounts_updated_at BEFORE UPDATE ON x_accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- -------------------------------------------------------------
 -- 4. Create Indexes for Scaling to 100+ Accounts
@@ -138,6 +151,8 @@ CREATE INDEX idx_tasks_is_archived ON tasks(is_archived);
 CREATE INDEX idx_tasks_deleted_at ON tasks(deleted_at);
 CREATE INDEX idx_users_role ON users(role_id);
 CREATE INDEX idx_users_rank ON users(rank_id);
+CREATE INDEX idx_producthunt_accounts_user ON producthunt_accounts(user_id);
+CREATE INDEX idx_x_accounts_user ON x_accounts(user_id);
 
 -- -------------------------------------------------------------
 -- 5. Seed Initial Lookup Tables & Default Admin User
